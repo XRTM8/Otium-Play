@@ -8,16 +8,20 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="theme-color" content="#070709">
+  <meta name="color-scheme" content="dark">
   <meta name="referrer" content="no-referrer">
   <link rel="manifest" href="manifest.json">
+  <link rel="icon" type="image/png" href="icons/icon-192.png">
+  <link rel="apple-touch-icon" href="icons/icon-192.png">
 
-  <!-- Typography & Icons -->
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800;900&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
-  
-  <link rel="stylesheet" href="styles.css">
+  <!-- Self-hosted typography & icons: zero external requests, works offline -->
+  <link rel="preload" href="fonts/tajawal-5.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="fonts/tajawal-7.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="fonts/tajawal-9.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="fonts/tajawal.css">
+  <link rel="stylesheet" href="vendor/fontawesome/css/all.min.css">
+
+  <link rel="stylesheet" href="styles.css?v=1.1.0">
 </head>
 <body>
 
@@ -137,7 +141,7 @@
             </div>
             <div class="version-text">
               <span class="v-label">إصدار التطبيق</span>
-              <span class="v-val" id="installedVersionText">v1.0.5</span>
+              <span class="v-val" id="installedVersionText">v1.1.0</span>
             </div>
           </div>
           <button class="check-update-btn" id="manualCheckUpdateBtn">
@@ -177,7 +181,7 @@
         <button class="btn-back" id="closeSearchOverlay"><i class="fa-solid fa-chevron-right"></i></button>
         <div class="search-bar-wrap">
           <i class="fa-solid fa-magnifying-glass"></i>
-          <input type="text" id="overlaySearchInput" placeholder="ابحث عن مسلسل..." autocomplete="off">
+          <input type="text" id="overlaySearchInput" placeholder="ابحث عن مسلسل..." autocomplete="off" spellcheck="false" enterkeyhint="search">
           <button class="search-clear hidden" id="clearSearchInput"><i class="fa-solid fa-xmark"></i></button>
         </div>
       </div>
@@ -353,6 +357,6 @@
 
   </div>
 
-  <script src="app.js"></script>
+  <script src="app.js?v=1.1.0" defer></script>
 </body>
 </html>

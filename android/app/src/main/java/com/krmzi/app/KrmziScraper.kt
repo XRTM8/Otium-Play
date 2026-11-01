@@ -1,60 +1,197 @@
 package com.krmzi.app
 
+import android.content.Context
 import android.net.Uri
 import android.util.Base64
 import android.util.Log
+import okhttp3.Cache
+import okhttp3.ConnectionPool
+import okhttp3.Dispatcher
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.File
 import java.net.URLDecoder
 import java.net.URLEncoder
+import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.regex.Pattern
 
+/**
+ * Native scraper used by the Android WebView.
+ *
+ * All public methods are synchronous and are called from WebView's background
+ * request thread (or from our own IO pool). Responses are cached in memory with
+ * per-endpoint TTLs, duplicate concurrent requests are coalesced, and the
+ * underlying OkHttp client keeps connections alive and uses a small disk cache.
+ */
 object KrmziScraper {
 
     private const val TAG = "KrmziScraper"
+    private const val ORIGIN = "https://krmzi.org"
+    private const val USER_AGENT =
+        "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
 
-    private val client = OkHttpClient.Builder()
-        .connectTimeout(12, TimeUnit.SECONDS)
-        .readTimeout(15, TimeUnit.SECONDS)
-        .followRedirects(true)
-        .retryOnConnectionFailure(true)
-        .build()
+    private const val DEFAULT_TTL_MS = 5 * 60 * 1000L
+    private const val HOME_TTL_MS = 2 * 60 * 1000L
+    private const val DETAIL_TTL_MS = 10 * 60 * 1000L
+    private const val SEARCH_TTL_MS = 10 * 60 * 1000L
 
-    private const val USER_AGENT = "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
+    private val threadCounter = AtomicInteger(0)
+    private val ioPool: ExecutorService = Executors.newFixedThreadPool(4) { runnable ->
+        Thread(runnable, "krmzi-io-${threadCounter.incrementAndGet()}").apply {
+            isDaemon = true
+            priority = Thread.NORM_PRIORITY
+        }
+    }
 
-    // Simple thread-safe memory cache with 5 minutes TTL
-    private data class CacheEntry(val data: String, val timestamp: Long)
+    @Volatile
+    private var initialized = false
+
+    @Volatile
+    private var client: OkHttpClient = buildClient(null)
+
+    private data class CacheEntry(val data: String, val timestamp: Long, val ttlMs: Long)
+
     private val memoryCache = ConcurrentHashMap<String, CacheEntry>()
-    private const val CACHE_TTL_MS = 5 * 60 * 1000L
+    private val inFlight = ConcurrentHashMap<String, CompletableFuture<String>>()
 
-    private fun getCached(key: String): String? {
-        val entry = memoryCache[key] ?: return null
-        if (System.currentTimeMillis() - entry.timestamp < CACHE_TTL_MS) {
-            return entry.data
+    /* ------------------------------------------------------------------ */
+    /*  Client lifecycle                                                   */
+    /* ------------------------------------------------------------------ */
+
+    fun init(context: Context) {
+        if (initialized) return
+        synchronized(this) {
+            if (initialized) return
+            try {
+                val cacheDir = File(context.cacheDir, "krmzi_http")
+                val diskCache = Cache(cacheDir, 32L * 1024 * 1024)
+                client = buildClient(diskCache)
+            } catch (e: Exception) {
+                Log.w(TAG, "Unable to create HTTP cache: ${e.message}")
+            }
+            initialized = true
         }
-        memoryCache.remove(key)
-        return null
     }
 
-    private fun putCache(key: String, data: String) {
-        if (memoryCache.size > 150) {
-            memoryCache.clear()
+    private fun buildClient(cache: Cache?): OkHttpClient {
+        val dispatcher = Dispatcher().apply {
+            maxRequests = 16
+            maxRequestsPerHost = 8
         }
-        memoryCache[key] = CacheEntry(data, System.currentTimeMillis())
+        return OkHttpClient.Builder()
+            .dispatcher(dispatcher)
+            .connectionPool(ConnectionPool(8, 5, TimeUnit.MINUTES))
+            .connectTimeout(10, TimeUnit.SECONDS)
+            .readTimeout(15, TimeUnit.SECONDS)
+            .writeTimeout(15, TimeUnit.SECONDS)
+            .callTimeout(25, TimeUnit.SECONDS)
+            .followRedirects(true)
+            .followSslRedirects(true)
+            .retryOnConnectionFailure(true)
+            .apply { if (cache != null) cache(cache) }
+            .build()
     }
+
+    /* ------------------------------------------------------------------ */
+    /*  Cache                                                              */
+    /* ------------------------------------------------------------------ */
+
+    private fun cached(key: String, ttlMs: Long, producer: () -> String): String {
+        val now = System.currentTimeMillis()
+        memoryCache[key]?.let { entry ->
+            if (now - entry.timestamp < entry.ttlMs) return entry.data
+            memoryCache.remove(key, entry)
+        }
+
+        val running = inFlight[key]
+        if (running != null) {
+            return await(running, key, producer)
+        }
+
+        val future = CompletableFuture<String>()
+        val previous = inFlight.putIfAbsent(key, future)
+        if (previous != null) {
+            return await(previous, key, producer)
+        }
+
+        return try {
+            val data = producer()
+            if (isCacheablePayload(data)) {
+                memoryCache[key] = CacheEntry(data, System.currentTimeMillis(), ttlMs)
+                trimCache()
+            }
+            future.complete(data)
+            data
+        } catch (t: Throwable) {
+            future.completeExceptionally(t)
+            throw t
+        } finally {
+            inFlight.remove(key, future)
+        }
+    }
+
+    private fun await(
+        future: CompletableFuture<String>,
+        key: String,
+        fallback: () -> String
+    ): String {
+        return try {
+            future.get(30, TimeUnit.SECONDS)
+        } catch (e: Exception) {
+            Log.w(TAG, "Coalesced request failed for $key: ${e.message}")
+            fallback()
+        }
+    }
+
+    private fun isCacheablePayload(data: String): Boolean {
+        if (data.isEmpty()) return false
+        return try {
+            val json = JSONObject(data)
+            !json.has("error") && json.optBoolean("isSuccess", true)
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun trimCache() {
+        if (memoryCache.size <= 180) return
+        val now = System.currentTimeMillis()
+        val iterator = memoryCache.entries.iterator()
+        while (iterator.hasNext()) {
+            val entry = iterator.next()
+            if (now - entry.value.timestamp >= entry.value.ttlMs) iterator.remove()
+        }
+        if (memoryCache.size > 180) {
+            memoryCache.entries
+                .sortedBy { it.value.timestamp }
+                .take(memoryCache.size - 150)
+                .forEach { memoryCache.remove(it.key) }
+        }
+    }
+
+    /* ------------------------------------------------------------------ */
+    /*  Networking                                                         */
+    /* ------------------------------------------------------------------ */
 
     private fun fetchHtml(url: String): String {
+        if (!isKrmziUrl(url)) {
+            Log.w(TAG, "Blocked non-krmzi URL: $url")
+            return ""
+        }
         return try {
             val request = Request.Builder()
                 .url(url)
                 .header("User-Agent", USER_AGENT)
                 .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
                 .header("Accept-Language", "ar,en-US;q=0.9,en;q=0.8")
-                .header("Referer", "https://krmzi.org/")
+                .header("Referer", "$ORIGIN/")
                 .build()
 
             client.newCall(request).execute().use { response ->
@@ -70,37 +207,166 @@ object KrmziScraper {
         }
     }
 
-    // Helper to unwrap advertising redirects (e.g. sayyarh.com?url=aHR0cHM...)
+    /* ------------------------------------------------------------------ */
+    /*  URL helpers                                                        */
+    /* ------------------------------------------------------------------ */
+
+    private fun isKrmziUrl(raw: String): Boolean {
+        return try {
+            val uri = Uri.parse(raw)
+            val scheme = uri.scheme?.lowercase()
+            val host = uri.host?.lowercase()
+            (scheme == "https" || scheme == "http") &&
+                (host == "krmzi.org" || host == "www.krmzi.org")
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    /** Unwrap ad-shortener URLs such as sayyarh.com?url=aHR0cHM6... */
     fun extractRealUrl(rawUrl: String): String {
         if (rawUrl.isEmpty()) return ""
-        if (rawUrl.contains("krmzi.org/episode/")) return rawUrl
+        if (rawUrl.contains("krmzi.org/episode/") || rawUrl.contains("krmzi.org/series/")) {
+            return rawUrl
+        }
 
-        val pattern = Pattern.compile("[?&](?:url|link|target)=([^&]+)")
-        val matcher = pattern.matcher(rawUrl)
+        val matcher = WRAPPER_PATTERN.matcher(rawUrl)
         if (matcher.find()) {
             try {
-                var valStr = URLDecoder.decode(matcher.group(1) ?: "", "UTF-8")
-                if (!valStr.startsWith("http")) {
-                    val decodedBytes = Base64.decode(valStr, Base64.DEFAULT)
-                    val decodedStr = String(decodedBytes, Charsets.UTF_8)
-                    if (decodedStr.contains("krmzi.org")) {
-                        return URLDecoder.decode(decodedStr, "UTF-8")
+                var value = URLDecoder.decode(matcher.group(1) ?: "", "UTF-8")
+                if (!value.startsWith("http")) {
+                    val decoded = decodeBase64(value)
+                    if (decoded != null && decoded.contains("krmzi.org")) {
+                        return URLDecoder.decode(decoded, "UTF-8")
                     }
                 }
-                if (valStr.contains("krmzi.org")) {
-                    return valStr
+                if (value.contains("krmzi.org")) {
+                    return value
                 }
-            } catch (_: Exception) {}
+            } catch (_: Exception) {
+                /* ignore malformed wrappers */
+            }
         }
         return rawUrl
     }
+
+    private fun decodeBase64(value: String): String? {
+        val candidates = intArrayOf(Base64.DEFAULT, Base64.URL_SAFE or Base64.NO_WRAP)
+        for (flags in candidates) {
+            try {
+                val text = String(Base64.decode(value, flags), Charsets.UTF_8)
+                if (text.contains("http") || text.contains("krmzi.org")) return text
+            } catch (_: Exception) {
+                /* try the next decoder */
+            }
+        }
+        return null
+    }
+
+    /* ------------------------------------------------------------------ */
+    /*  HTML helpers                                                       */
+    /* ------------------------------------------------------------------ */
+
+    private fun decodeHtml(text: String): String {
+        return text
+            .replace("&quot;", "\"")
+            .replace("&#039;", "'")
+            .replace("&#39;", "'")
+            .replace("&lt;", "<")
+            .replace("&gt;", ">")
+            .replace("&nbsp;", " ")
+            .replace("&amp;", "&")
+    }
+
+    private fun stripTags(html: String): String {
+        val withoutTags = TAG_PATTERN.matcher(html).replaceAll(" ")
+        return WHITESPACE_PATTERN.matcher(decodeHtml(withoutTags)).replaceAll(" ").trim()
+    }
+
+    private fun cleanTitle(title: String): String {
+        return stripTags(title).replace(TITLE_SUFFIX, "").trim()
+    }
+
+    private fun extractTitle(html: String): String {
+        val matcher = TITLE_PATTERN.matcher(html)
+        return if (matcher.find()) cleanTitle(matcher.group(1) ?: "") else ""
+    }
+
+    private fun extractPoster(html: String): String {
+        val matcher = POSTER_PATTERN.matcher(html)
+        if (matcher.find()) return decodeHtml(matcher.group(1) ?: "").trim()
+        val ogMatcher = OG_IMAGE_PATTERN.matcher(html)
+        return if (ogMatcher.find()) decodeHtml(ogMatcher.group(1) ?: "").trim() else ""
+    }
+
+    private fun parseCards(html: String, kind: String): JSONArray {
+        val items = JSONArray()
+        if (html.isEmpty()) return items
+
+        val blockMatcher = BLOCK_PATTERN.matcher(html)
+        while (blockMatcher.find()) {
+            val block = blockMatcher.group(1) ?: continue
+            val linkMatcher =
+                if (kind == "series") SERIES_LINK_PATTERN.matcher(block)
+                else LINK_PATTERN.matcher(block)
+            if (!linkMatcher.find()) continue
+
+            val itemUrl = extractRealUrl(linkMatcher.group(1) ?: "")
+            if (!isKrmziUrl(itemUrl)) continue
+            if (kind == "search" &&
+                !itemUrl.contains("/series/") &&
+                !itemUrl.contains("/episode/")
+            ) {
+                continue
+            }
+
+            val title = cleanTitle(linkMatcher.group(2) ?: "")
+            val thumbMatcher = THUMB_PATTERN.matcher(block)
+            val thumbnail = if (thumbMatcher.find()) decodeHtml(thumbMatcher.group(1) ?: "") else ""
+
+            if (kind == "series") {
+                items.put(JSONObject().apply {
+                    put("url", itemUrl)
+                    put("title", title)
+                    put("thumbnail", thumbnail)
+                })
+                continue
+            }
+
+            val numMatcher = EPISODE_NUM_PATTERN.matcher(block)
+            val episodeNum = if (numMatcher.find()) numMatcher.group(1) ?: "" else ""
+            val seriesTitle =
+                if (episodeNum.isNotEmpty()) title.replace(TITLE_EPISODE_TAIL, "").trim()
+                else title
+
+            items.put(JSONObject().apply {
+                put("url", itemUrl)
+                put("title", title)
+                put("seriesTitle", seriesTitle.ifEmpty { title })
+                put("episodeNum", episodeNum)
+                put("thumbnail", thumbnail)
+                if (kind == "search") {
+                    put("type", if (itemUrl.contains("/series/")) "series" else "episode")
+                }
+            })
+        }
+        return items
+    }
+
+    /* ------------------------------------------------------------------ */
+    /*  Public API                                                         */
+    /* ------------------------------------------------------------------ */
 
     fun handle(fullUrl: String): String {
         return try {
             val uri = Uri.parse(fullUrl)
             val path = uri.path ?: ""
-            
+
             when {
+                path.endsWith("/api/home") -> {
+                    val page = uri.getQueryParameter("page")?.toIntOrNull() ?: 1
+                    getHome(page)
+                }
                 path.contains("/api/episodes") -> {
                     val page = uri.getQueryParameter("page")?.toIntOrNull() ?: 1
                     getEpisodes(page)
@@ -121,426 +387,427 @@ object KrmziScraper {
                     val url = uri.getQueryParameter("url") ?: ""
                     getEpisodeDetail(url)
                 }
-                else -> JSONObject().put("error", "Unknown endpoint: $path").toString()
+                path.contains("/api/health") -> getHealth()
+                else -> errorJson("Unknown endpoint: $path")
             }
         } catch (e: Exception) {
             Log.e(TAG, "Error in handle: ${e.message}", e)
-            JSONObject().put("error", e.message ?: "Unknown error").toString()
+            errorJson(e.message ?: "Unknown error")
+        }
+    }
+
+    fun getHome(page: Int): String {
+        val safePage = page.coerceAtLeast(1)
+        return cached("home_$safePage", HOME_TTL_MS) {
+            val episodesFuture = CompletableFuture.supplyAsync({
+                JSONObject(getEpisodes(safePage))
+            }, ioPool)
+            val seriesFuture = CompletableFuture.supplyAsync({
+                JSONObject(getSeries(safePage))
+            }, ioPool)
+
+            val episodes = try {
+                episodesFuture.get(25, TimeUnit.SECONDS)
+            } catch (e: Exception) {
+                episodesFuture.cancel(true)
+                JSONObject().put("page", safePage).put("episodes", JSONArray()).put("hasNext", false)
+            }
+            val series = try {
+                seriesFuture.get(25, TimeUnit.SECONDS)
+            } catch (e: Exception) {
+                seriesFuture.cancel(true)
+                JSONObject().put("page", safePage).put("series", JSONArray()).put("hasNext", false)
+            }
+
+            JSONObject().apply {
+                put("episodes", episodes)
+                put("series", series)
+                put("fetchedAt", System.currentTimeMillis())
+                put("isSuccess", true)
+            }.toString()
         }
     }
 
     fun getEpisodes(page: Int): String {
-        val cacheKey = "episodes_page_$page"
-        getCached(cacheKey)?.let { return it }
+        val safePage = page.coerceAtLeast(1)
+        return cached("episodes_$safePage", DEFAULT_TTL_MS) {
+            val url = if (safePage == 1) "$ORIGIN/" else "$ORIGIN/page/$safePage/"
+            val html = fetchHtml(url)
+            val episodes = parseCards(html, "episodes")
+            val hasNext = html.contains("page/${safePage + 1}/")
 
-        val url = if (page == 1) "https://krmzi.org/" else "https://krmzi.org/page/$page/"
-        val html = fetchHtml(url)
-
-        val episodes = JSONArray()
-        if (html.isNotEmpty()) {
-            val blockPattern = Pattern.compile("<div class=\"block-post\">([\\s\\S]*?)</div>\\s*</div>")
-            val matcher = blockPattern.matcher(html)
-
-            // Flexible link matcher that also captures redirected ad wrappers
-            val linkPattern = Pattern.compile("<a\\s+href=\"([^\"]+)\"\\s+title=\"([^\"]+)\"")
-            val numPattern = Pattern.compile("<div class=\"episodeNum\">[\\s\\S]*?<span>(\\d+)</span>")
-            val thumbPattern = Pattern.compile("url\\((https://krmzi\\.org/wp-content/uploads/[^)]+)\\)")
-
-            while (matcher.find()) {
-                val blockHtml = matcher.group(1) ?: continue
-                val lm = linkPattern.matcher(blockHtml)
-                if (!lm.find()) continue
-
-                val rawHref = lm.group(1) ?: ""
-                val epUrl = extractRealUrl(rawHref)
-                val fullTitle = (lm.group(2) ?: "").replace(Regex("\\s*-\\s*قرمزي\\s*$"), "").trim()
-
-                val nm = numPattern.matcher(blockHtml)
-                val episodeNum = if (nm.find()) nm.group(1) ?: "" else ""
-
-                val tm = thumbPattern.matcher(blockHtml)
-                val thumb = if (tm.find()) tm.group(1) ?: "" else ""
-
-                var seriesTitle = fullTitle
-                if (episodeNum.isNotEmpty()) {
-                    seriesTitle = fullTitle.replace(Regex("الحلقة\\s*$episodeNum.*"), "").trim()
-                }
-
-                val item = JSONObject().apply {
-                    put("url", epUrl)
-                    put("title", fullTitle)
-                    put("seriesTitle", if (seriesTitle.isNotEmpty()) seriesTitle else fullTitle)
-                    put("episodeNum", episodeNum)
-                    put("thumbnail", thumb)
-                }
-                episodes.put(item)
-            }
+            JSONObject().apply {
+                put("page", safePage)
+                put("episodes", episodes)
+                put("hasNext", hasNext)
+                put("isSuccess", episodes.length() > 0)
+            }.toString()
         }
-
-        val hasNext = html.contains("page/${page + 1}/")
-        val result = JSONObject().apply {
-            put("page", page)
-            put("episodes", episodes)
-            put("hasNext", hasNext)
-            put("isSuccess", episodes.length() > 0)
-        }.toString()
-
-        if (episodes.length() > 0) {
-            putCache(cacheKey, result)
-        }
-        return result
     }
 
     fun getSeries(page: Int): String {
-        val cacheKey = "series_page_$page"
-        getCached(cacheKey)?.let { return it }
+        val safePage = page.coerceAtLeast(1)
+        return cached("series_$safePage", DEFAULT_TTL_MS) {
+            val url =
+                if (safePage == 1) "$ORIGIN/series-list/"
+                else "$ORIGIN/series-list/page/$safePage/"
+            val html = fetchHtml(url)
+            val series = parseCards(html, "series")
+            val hasNext = html.contains("series-list/page/${safePage + 1}/")
 
-        val url = if (page == 1) "https://krmzi.org/series-list/" else "https://krmzi.org/series-list/page/$page/"
-        val html = fetchHtml(url)
-
-        val seriesList = JSONArray()
-        if (html.isNotEmpty()) {
-            val blockPattern = Pattern.compile("<div class=\"block-post\">([\\s\\S]*?)</div>\\s*</div>")
-            val matcher = blockPattern.matcher(html)
-
-            val linkPattern = Pattern.compile("<a\\s+href=\"([^\"]+)\"\\s+title=\"([^\"]+)\"")
-            val thumbPattern = Pattern.compile("url\\((https://krmzi\\.org/wp-content/uploads/[^)]+)\\)")
-
-            while (matcher.find()) {
-                val blockHtml = matcher.group(1) ?: continue
-                val lm = linkPattern.matcher(blockHtml)
-                if (!lm.find()) continue
-
-                val rawHref = lm.group(1) ?: ""
-                val serUrl = extractRealUrl(rawHref)
-                val title = (lm.group(2) ?: "").replace(Regex("\\s*-\\s*قرمزي\\s*$"), "").trim()
-
-                val tm = thumbPattern.matcher(blockHtml)
-                val thumb = if (tm.find()) tm.group(1) ?: "" else ""
-
-                val item = JSONObject().apply {
-                    put("url", serUrl)
-                    put("title", title)
-                    put("thumbnail", thumb)
-                }
-                seriesList.put(item)
-            }
+            JSONObject().apply {
+                put("page", safePage)
+                put("series", series)
+                put("hasNext", hasNext)
+                put("isSuccess", series.length() > 0)
+            }.toString()
         }
-
-        val hasNext = html.contains("series-list/page/${page + 1}/")
-        val result = JSONObject().apply {
-            put("page", page)
-            put("series", seriesList)
-            put("hasNext", hasNext)
-            put("isSuccess", seriesList.length() > 0)
-        }.toString()
-
-        if (seriesList.length() > 0) {
-            putCache(cacheKey, result)
-        }
-        return result
     }
 
     fun getSeriesDetail(url: String): String {
-        if (url.isEmpty()) return JSONObject().put("error", "URL cannot be empty").toString()
-        val cacheKey = "series_detail_" + url.hashCode()
-        getCached(cacheKey)?.let { return it }
+        if (!isKrmziUrl(url)) return errorJson("Invalid series URL")
+        return cached("series_detail_${url.hashCode()}", DETAIL_TTL_MS) {
+            val html = fetchHtml(url)
+            val title = extractTitle(html)
+            val poster = extractPoster(html)
+            val storyMatcher = STORY_PATTERN.matcher(html)
+            val story =
+                if (storyMatcher.find()) stripTags(storyMatcher.group(1) ?: "") else ""
 
-        val html = fetchHtml(url)
-        val titlePattern = Pattern.compile("<h1[^>]*>([\\s\\S]*?)</h1>")
-        val tm = titlePattern.matcher(html)
-        val title = if (tm.find()) tm.group(1)?.replace(Regex("<[^>]+>"), "")?.trim() ?: "" else ""
+            val episodes = JSONArray()
+            val seen = mutableSetOf<String>()
+            val anchorMatcher = ANCHOR_PATTERN.matcher(html)
+            while (anchorMatcher.find()) {
+                val epUrl = extractRealUrl(anchorMatcher.group(1) ?: "")
+                if (!epUrl.contains("/episode/") || !isKrmziUrl(epUrl)) continue
+                if (!seen.add(epUrl)) continue
 
-        val posterPattern = Pattern.compile("url\\((https://krmzi\\.org/wp-content/uploads/[^)]+)\\)")
-        val pm = posterPattern.matcher(html)
-        val poster = if (pm.find()) pm.group(1) ?: "" else ""
+                val inner = stripTags(anchorMatcher.group(2) ?: "")
+                val numMatch = EPISODE_URL_NUM.find(epUrl)
+                val epNum = numMatch?.groupValues?.get(1) ?: ""
 
-        val storyPattern = Pattern.compile("<div class=\"story\">([\\s\\S]*?)</div>")
-        val sm = storyPattern.matcher(html)
-        val story = if (sm.find()) sm.group(1)?.replace(Regex("<[^>]+>"), "")?.trim() ?: "" else ""
+                episodes.put(JSONObject().apply {
+                    put("url", epUrl)
+                    put("title", inner.ifEmpty { "الحلقة $epNum" })
+                    put("episodeNum", epNum)
+                })
+            }
 
-        val episodes = JSONArray()
-        val epPattern = Pattern.compile("<a\\s+href=\"([^\"]+)\"[^>]*>([\\s\\S]*?)</a>")
-        val em = epPattern.matcher(html)
-        val seen = mutableSetOf<String>()
-
-        while (em.find()) {
-            val rawEpUrl = em.group(1) ?: continue
-            val epUrl = extractRealUrl(rawEpUrl)
-            if (seen.contains(epUrl) || !epUrl.contains("/episode/")) continue
-            seen.add(epUrl)
-
-            val inner = em.group(2)?.replace(Regex("<[^>]+>"), " ")?.trim() ?: ""
-            val numRegex = Regex("الحلقة-(\\d+)")
-            val numMatch = numRegex.find(epUrl)
-            val epNum = numMatch?.groupValues?.get(1) ?: ""
-
-            episodes.put(JSONObject().apply {
-                put("url", epUrl)
-                put("title", if (inner.isNotEmpty()) inner else "الحلقة $epNum")
-                put("episodeNum", epNum)
-            })
+            JSONObject().apply {
+                put("url", url)
+                put("title", title)
+                put("poster", poster)
+                put("story", story)
+                put("episodes", episodes)
+                put("isSuccess", true)
+            }.toString()
         }
-
-        val result = JSONObject().apply {
-            put("url", url)
-            put("title", title)
-            put("poster", poster)
-            put("story", story)
-            put("episodes", episodes)
-            put("isSuccess", true)
-        }.toString()
-
-        putCache(cacheKey, result)
-        return result
     }
 
     fun getSearch(query: String): String {
-        if (query.trim().isEmpty()) {
+        val trimmed = query.trim()
+        if (trimmed.isEmpty()) {
             return JSONObject().apply {
                 put("query", "")
                 put("results", JSONArray())
+                put("isSuccess", true)
             }.toString()
         }
 
-        val cacheKey = "search_" + query.trim().lowercase()
-        getCached(cacheKey)?.let { return it }
+        return cached("search_${trimmed.lowercase()}", SEARCH_TTL_MS) {
+            val searchUrl = "$ORIGIN/?s=" + URLEncoder.encode(trimmed, "UTF-8")
+            val html = fetchHtml(searchUrl)
+            val results = parseCards(html, "search")
 
-        val searchUrl = "https://krmzi.org/?s=" + URLEncoder.encode(query, "UTF-8")
-        val html = fetchHtml(searchUrl)
-
-        val results = JSONArray()
-        if (html.isNotEmpty()) {
-            val blockPattern = Pattern.compile("<div class=\"block-post\">([\\s\\S]*?)</div>\\s*</div>")
-            val matcher = blockPattern.matcher(html)
-
-            val linkPattern = Pattern.compile("<a\\s+href=\"([^\"]+)\"\\s+title=\"([^\"]+)\"")
-            val thumbPattern = Pattern.compile("url\\((https://krmzi\\.org/wp-content/uploads/[^)]+)\\)")
-
-            while (matcher.find()) {
-                val blockHtml = matcher.group(1) ?: continue
-                val lm = linkPattern.matcher(blockHtml)
-                if (!lm.find()) continue
-
-                val rawHref = lm.group(1) ?: ""
-                val itemUrl = extractRealUrl(rawHref)
-                val title = (lm.group(2) ?: "").replace(Regex("\\s*-\\s*قرمزي\\s*$"), "").trim()
-                val isSeries = itemUrl.contains("/series/")
-
-                val tm = thumbPattern.matcher(blockHtml)
-                val thumb = if (tm.find()) tm.group(1) ?: "" else ""
-
-                results.put(JSONObject().apply {
-                    put("url", itemUrl)
-                    put("title", title)
-                    put("type", if (isSeries) "series" else "episode")
-                    put("thumbnail", thumb)
-                })
-            }
+            JSONObject().apply {
+                put("query", trimmed)
+                put("results", results)
+                put("isSuccess", true)
+            }.toString()
         }
-
-        val result = JSONObject().apply {
-            put("query", query)
-            put("results", results)
-            put("isSuccess", true)
-        }.toString()
-
-        putCache(cacheKey, result)
-        return result
     }
 
     fun getEpisodeDetail(epUrl: String): String {
-        if (epUrl.isEmpty()) return JSONObject().put("error", "URL cannot be empty").toString()
-        val cacheKey = "ep_detail_" + epUrl.hashCode()
-        getCached(cacheKey)?.let { return it }
+        if (!isKrmziUrl(epUrl)) return errorJson("Invalid episode URL")
+        return cached("ep_detail_${epUrl.hashCode()}", DETAIL_TTL_MS) {
+            val html = fetchHtml(epUrl)
+            val title = extractTitle(html)
+            val episodeNum = EPISODE_URL_NUM.find(epUrl)?.groupValues?.get(1) ?: ""
+            val poster = extractPoster(html)
 
-        val html = fetchHtml(epUrl)
+            val seriesMatcher = SERIES_HREF_PATTERN.matcher(html)
+            val seriesUrl = if (seriesMatcher.find()) seriesMatcher.group(1) ?: "" else ""
 
-        val titlePattern = Pattern.compile("<h1[^>]*>([\\s\\S]*?)</h1>")
-        val tm = titlePattern.matcher(html)
-        val rawTitle = if (tm.find()) tm.group(1)?.replace(Regex("<[^>]+>"), "")?.trim() ?: "" else ""
-        val title = rawTitle.replace(Regex("\\s*-\\s*قرمزي\\s*$"), "").trim()
+            val rawServerList = mutableListOf<Pair<String, String>>()
+            val seenServerIds = mutableSetOf<String>()
 
-        val numRegex = Regex("الحلقة-(\\d+)")
-        val numMatch = numRegex.find(epUrl)
-        val episodeNum = numMatch?.groupValues?.get(1) ?: ""
+            // 1. Modern Qesen Base64 payload (used by virtually every episode).
+            val qesenMatcher = QESEN_PATTERN.matcher(html)
+            if (qesenMatcher.find()) {
+                try {
+                    val decoded = decodeBase64(qesenMatcher.group(1) ?: "")
+                    if (decoded != null) {
+                        val postObj = JSONObject(decoded)
+                        val rawServers = postObj.optJSONArray("servers") ?: JSONArray()
+                        for (i in 0 until rawServers.length()) {
+                            val server = rawServers.optJSONObject(i) ?: continue
+                            val name = server.optString("name", "").trim()
+                            val id = server.optString("id", "").trim()
+                            if (name.isNotEmpty() && id.isNotEmpty() && seenServerIds.add(id)) {
+                                rawServerList.add(Pair(name, id))
+                            }
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "Failed parsing Qesen payload: ${e.message}")
+                }
+            }
 
-        val posterPattern = Pattern.compile("url\\('?(https://krmzi\\.org/wp-content/uploads/[^')]+)'?\\)")
-        val pm = posterPattern.matcher(html)
-        val poster = if (pm.find()) pm.group(1) ?: "" else ""
+            // 2. Legacy <li data-name data-server> markup.
+            val liMatcher = LEGACY_SERVER_PATTERN.matcher(html)
+            while (liMatcher.find()) {
+                val name = (liMatcher.group(1) ?: "").trim()
+                val id = (liMatcher.group(2) ?: "").trim()
+                if (name.isNotEmpty() && id.isNotEmpty() && seenServerIds.add(id)) {
+                    rawServerList.add(Pair(name, id))
+                }
+            }
 
-        val seriesPattern = Pattern.compile("<a[^>]+href=\"(https://krmzi\\.org/series/[^\"]+)\"")
-        val sm = seriesPattern.matcher(html)
-        val seriesUrl = if (sm.find()) sm.group(1) ?: "" else ""
-
-        val servers = JSONArray()
-        val directStreams = JSONArray()
-        val seenServerIds = mutableSetOf<String>()
-        val rawServerList = mutableListOf<Pair<String, String>>()
-
-        // 1. Primary: Extract servers from modern Qesen Base64 payload (used by 100% of krmzi episodes)
-        val qesenPattern = Pattern.compile("href=\"https://qesen\\.net/krmzi\\?post=([^\"]+)\"")
-        val qm = qesenPattern.matcher(html)
-        if (qm.find()) {
-            try {
-                val b64 = qm.group(1) ?: ""
-                val decoded = String(Base64.decode(b64, Base64.DEFAULT), Charsets.UTF_8)
-                val postObj = JSONObject(decoded)
-                val rawServers = postObj.optJSONArray("servers") ?: JSONArray()
-                for (i in 0 until rawServers.length()) {
-                    val s = rawServers.getJSONObject(i)
-                    val sName = s.optString("name", "").trim()
-                    val sId = s.optString("id", "").trim()
-                    if (sName.isNotEmpty() && sId.isNotEmpty() && !seenServerIds.contains(sId)) {
-                        rawServerList.add(Pair(sName, sId))
-                        seenServerIds.add(sId)
+            // 3. Last resort: a direct iframe on the page.
+            if (rawServerList.isEmpty()) {
+                val iframeMatcher = IFRAME_PATTERN.matcher(html)
+                if (iframeMatcher.find()) {
+                    val iframeUrl = iframeMatcher.group(1) ?: ""
+                    if (iframeUrl.isNotEmpty()) {
+                        rawServerList.add(Pair("سيرفر رئيسي", iframeUrl))
                     }
                 }
-            } catch (e: Exception) {
-                Log.w(TAG, "Failed parsing Qesen payload: ${e.message}")
             }
-        }
 
-        // 2. Legacy: Extract servers from <li> tags if present
-        val liPattern = Pattern.compile("<li[^>]*data-name=\"([^\"]*)\"[^>]*data-server=\"([^\"]*)\"")
-        val liMatcher = liPattern.matcher(html)
-        while (liMatcher.find()) {
-            val sName = (liMatcher.group(1) ?: "").trim()
-            val sId = (liMatcher.group(2) ?: "").trim()
-            if (sName.isNotEmpty() && sId.isNotEmpty() && !seenServerIds.contains(sId)) {
-                rawServerList.add(Pair(sName, sId))
-                seenServerIds.add(sId)
-            }
-        }
-
-        // 3. Fallback: Extract from direct iframe
-        if (rawServerList.isEmpty()) {
-            val ifPattern = Pattern.compile("<iframe[^>]+src=\"([^\"]+)\"")
-            val ifm = ifPattern.matcher(html)
-            if (ifm.find()) {
-                val ifUrl = ifm.group(1) ?: ""
-                if (ifUrl.isNotEmpty()) {
-                    rawServerList.add(Pair("سيرفر رئيسي", ifUrl))
+            // Extract OK.ru streams for every OK server concurrently.
+            val okServers = rawServerList.filter { it.first.equals("ok", ignoreCase = true) }
+            val okStreams = ConcurrentHashMap<String, JSONArray>()
+            if (okServers.isNotEmpty()) {
+                val futures = okServers.map { (_, id) ->
+                    CompletableFuture.runAsync({
+                        val streams = JSONArray()
+                        if (extractOkDirectStreams(id, streams)) {
+                            okStreams[id] = streams
+                        }
+                    }, ioPool)
                 }
-            }
-        }
-
-        // Process servers and prioritize OK.ru direct stream extraction
-        for ((sName, sId) in rawServerList) {
-            var embedUrl = ""
-            var isDirect = false
-
-            when (sName.lowercase()) {
-                "ok" -> {
-                    embedUrl = "https://ok.ru/videoembed/$sId"
-                    if (directStreams.length() == 0) {
-                        isDirect = extractOkDirectStreams(sId, directStreams)
+                futures.forEach { future ->
+                    try {
+                        future.get(20, TimeUnit.SECONDS)
+                    } catch (e: Exception) {
+                        Log.w(TAG, "OK.ru extraction timed out: ${e.message}")
                     }
                 }
-                "arab hd" -> embedUrl = "https://arabhd.onl/embed-$sId.html"
-                "estream" -> embedUrl = "https://arabveturk.com/embed-$sId.html"
-                "red hd" -> embedUrl = "https://iplayerhls.com/e/$sId"
-                "box" -> embedUrl = "https://youdboox.com/embed-$sId.html"
-                "now" -> embedUrl = "https://extreamnow.org/embed-$sId.html"
-                "pro hd" -> embedUrl = "https://embedo.co/e/$sId"
-                "dailymotion" -> embedUrl = "https://www.dailymotion.com/embed/video/$sId"
-                "youtube" -> embedUrl = "https://www.youtube.com/embed/$sId"
-                "express" -> embedUrl = if (sId.startsWith("http")) sId else "https://cloud.mail.ru/public/$sId"
-                else -> {
-                    if (sId.startsWith("http")) embedUrl = sId
-                }
             }
 
-            if (embedUrl.isNotEmpty()) {
+            val directStreams = JSONArray()
+            val seenStreamUrls = mutableSetOf<String>()
+            val directServers = mutableListOf<JSONObject>()
+            val otherServers = mutableListOf<JSONObject>()
+
+            for ((name, id) in rawServerList) {
+                val isDirect =
+                    name.equals("ok", ignoreCase = true) && okStreams.containsKey(id)
+
+                if (isDirect) {
+                    val streams = okStreams[id]
+                    if (streams != null) {
+                        for (i in 0 until streams.length()) {
+                            val stream = streams.optJSONObject(i) ?: continue
+                            val streamUrl = stream.optString("url", "")
+                            if (streamUrl.isNotEmpty() && seenStreamUrls.add(streamUrl)) {
+                                directStreams.put(stream)
+                            }
+                        }
+                    }
+                }
+
+                val embedUrl = buildEmbedUrl(name, id)
+                if (embedUrl.isEmpty()) continue
+
                 val serverObj = JSONObject().apply {
-                    put("name", sName)
-                    put("id", sId)
+                    put("name", name)
+                    put("id", id)
                     put("embedUrl", embedUrl)
                     put("hasDirectStream", isDirect)
                 }
-
-                // If this is the direct stream server, place it at the very top
-                if (isDirect) {
-                    servers.put(0, serverObj)
-                } else {
-                    servers.put(serverObj)
-                }
+                if (isDirect) directServers.add(serverObj) else otherServers.add(serverObj)
             }
+
+            val servers = JSONArray()
+            directServers.forEach { servers.put(it) }
+            otherServers.forEach { servers.put(it) }
+
+            JSONObject().apply {
+                put("url", epUrl)
+                put("title", title)
+                put("episodeNum", episodeNum)
+                put("poster", poster)
+                put("seriesUrl", seriesUrl)
+                put("servers", servers)
+                put("directStreams", directStreams)
+                put("isSuccess", true)
+            }.toString()
         }
+    }
 
-        val result = JSONObject().apply {
-            put("url", epUrl)
-            put("title", title)
-            put("episodeNum", episodeNum)
-            put("poster", poster)
-            put("seriesUrl", seriesUrl)
-            put("servers", servers)
-            put("directStreams", directStreams)
-            put("isSuccess", true)
+    fun getHealth(): String {
+        return JSONObject().apply {
+            put("ok", true)
+            put("native", true)
+            put("initialized", initialized)
+            put("cacheEntries", memoryCache.size)
+            put("inFlight", inFlight.size)
+            put("time", System.currentTimeMillis())
         }.toString()
+    }
 
-        putCache(cacheKey, result)
-        return result
+    /** Drop expired entries; called when Android reports memory pressure. */
+    fun trimMemory() {
+        val now = System.currentTimeMillis()
+        val iterator = memoryCache.entries.iterator()
+        while (iterator.hasNext()) {
+            val entry = iterator.next()
+            if (now - entry.value.timestamp >= entry.value.ttlMs) iterator.remove()
+        }
+        if (memoryCache.size > 60) {
+            memoryCache.entries
+                .sortedBy { it.value.timestamp }
+                .take(memoryCache.size - 40)
+                .forEach { memoryCache.remove(it.key) }
+        }
+    }
+
+    /** Drop every in-memory response; the disk/HTTP cache is left intact. */
+    fun clearMemoryCache() {
+        memoryCache.clear()
+    }
+
+    /* ------------------------------------------------------------------ */
+    /*  Providers                                                          */
+    /* ------------------------------------------------------------------ */
+
+    private fun buildEmbedUrl(name: String, id: String): String {
+        return when (name.lowercase()) {
+            "ok" -> "https://ok.ru/videoembed/$id"
+            "arab hd" -> "https://arabhd.onl/embed-$id.html"
+            "estream" -> "https://arabveturk.com/embed-$id.html"
+            "red hd" -> "https://iplayerhls.com/e/$id"
+            "box" -> "https://youdboox.com/embed-$id.html"
+            "now" -> "https://extreamnow.org/embed-$id.html"
+            "pro hd" -> "https://embedo.co/e/$id"
+            "dailymotion" -> "https://www.dailymotion.com/embed/video/$id"
+            "youtube" -> "https://www.youtube.com/embed/$id"
+            "express" -> if (id.startsWith("http")) id else "https://cloud.mail.ru/public/$id"
+            else -> if (id.startsWith("http")) id else ""
+        }
     }
 
     private fun extractOkDirectStreams(sId: String, directStreams: JSONArray): Boolean {
         return try {
-            val embedUrl = "https://ok.ru/videoembed/$sId"
             val request = Request.Builder()
-                .url(embedUrl)
+                .url("https://ok.ru/videoembed/$sId")
                 .header("User-Agent", USER_AGENT)
                 .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
                 .header("Accept-Language", "ar,en-US;q=0.9,en;q=0.8")
                 .build()
 
-            val okHtml = client.newCall(request).execute().use { res ->
-                if (res.isSuccessful) res.body?.string() ?: "" else ""
+            val okHtml = client.newCall(request).execute().use { response ->
+                if (response.isSuccessful) response.body?.string() ?: "" else ""
             }
             if (okHtml.isEmpty()) return false
 
-            val optPattern = Pattern.compile("data-options=\"([^\"]+)\"")
-            val optM = optPattern.matcher(okHtml)
-            if (optM.find()) {
-                val raw = (optM.group(1) ?: "").replace("&quot;", "\"")
-                val okData = JSONObject(raw)
-                val flashvars = okData.optJSONObject("flashvars")
-                val metaObj = flashvars?.opt("metadata")
-                val meta = if (metaObj is String) JSONObject(metaObj) else metaObj as? JSONObject
+            val optionsMatcher = OK_OPTIONS_PATTERN.matcher(okHtml)
+            if (!optionsMatcher.find()) return false
 
-                val videos = meta?.optJSONArray("videos")
-                if (videos != null && videos.length() > 0) {
-                    val qualityMap = mapOf(
-                        "full" to "1080p (Full HD)",
-                        "hd" to "720p (HD)",
-                        "sd" to "480p (SD)",
-                        "low" to "360p",
-                        "lowest" to "240p",
-                        "mobile" to "144p"
-                    )
-                    val order = listOf("full", "hd", "sd", "low", "lowest", "mobile")
-                    val videoList = mutableListOf<JSONObject>()
-                    for (j in 0 until videos.length()) {
-                        videoList.add(videos.getJSONObject(j))
-                    }
-                    for (q in order) {
-                        val match = videoList.firstOrNull { it.optString("name") == q }
-                        if (match != null) {
-                            val vUrl = match.optString("url")
-                            if (vUrl.isNotEmpty()) {
-                                directStreams.put(JSONObject().apply {
-                                    put("quality", qualityMap[q] ?: q)
-                                    put("url", vUrl)
-                                })
-                            }
-                        }
-                    }
-                    return directStreams.length() > 0
-                }
+            val raw = decodeHtml(optionsMatcher.group(1) ?: "").replace("&quot;", "\"")
+            val okData = JSONObject(raw)
+            val flashvars = okData.optJSONObject("flashvars") ?: return false
+            val metadataValue = flashvars.opt("metadata")
+            val metadata =
+                when (metadataValue) {
+                    is JSONObject -> metadataValue
+                    is String -> JSONObject(metadataValue)
+                    else -> null
+                } ?: return false
+
+            val videos = metadata.optJSONArray("videos") ?: return false
+            if (videos.length() == 0) return false
+
+            val videoList = ArrayList<JSONObject>(videos.length())
+            for (i in 0 until videos.length()) {
+                videos.optJSONObject(i)?.let { videoList.add(it) }
             }
-            false
+
+            val seen = mutableSetOf<String>()
+            for (quality in OK_QUALITY_ORDER) {
+                val match = videoList.firstOrNull { it.optString("name") == quality } ?: continue
+                val url = match.optString("url", "")
+                if (url.isEmpty() || !seen.add(url)) continue
+                directStreams.put(JSONObject().apply {
+                    put("quality", OK_QUALITY_LABELS[quality] ?: quality)
+                    put("url", url)
+                })
+            }
+            directStreams.length() > 0
         } catch (e: Exception) {
             Log.w(TAG, "Failed OK.ru extract for $sId: ${e.message}")
             false
         }
     }
+
+    private fun errorJson(message: String): String =
+        JSONObject().put("error", message).toString()
+
+    /* ------------------------------------------------------------------ */
+    /*  Precompiled patterns                                               */
+    /* ------------------------------------------------------------------ */
+
+    private val BLOCK_PATTERN =
+        Pattern.compile("<div class=\"block-post\">([\\s\\S]*?)</div>\\s*</div>")
+    private val LINK_PATTERN =
+        Pattern.compile("<a\\s+href=\"([^\"]+)\"\\s+title=\"([^\"]+)\"")
+    private val SERIES_LINK_PATTERN =
+        Pattern.compile("<a\\s+href=\"(https://krmzi\\.org/series/[^\"]+)\"\\s+title=\"([^\"]+)\"")
+    private val EPISODE_NUM_PATTERN =
+        Pattern.compile("<div class=\"episodeNum\">[\\s\\S]*?<span>(\\d+)</span>")
+    private val THUMB_PATTERN =
+        Pattern.compile("url\\((https://krmzi\\.org/wp-content/uploads/[^)]+)\\)")
+    private val TITLE_PATTERN = Pattern.compile("<h1[^>]*>([\\s\\S]*?)</h1>")
+    private val STORY_PATTERN = Pattern.compile("<div class=\"story\">([\\s\\S]*?)</div>")
+    private val POSTER_PATTERN =
+        Pattern.compile("url\\(['\"]?(https://krmzi\\.org/wp-content/uploads/[^)'\"]+)['\"]?\\)")
+    private val OG_IMAGE_PATTERN =
+        Pattern.compile("<meta[^>]+property=\"og:image\"[^>]+content=\"([^\"]+)\"")
+    private val SERIES_HREF_PATTERN =
+        Pattern.compile("<a[^>]+href=\"(https://krmzi\\.org/series/[^\"]+)\"")
+    private val ANCHOR_PATTERN = Pattern.compile("<a\\s+href=\"([^\"]+)\"[^>]*>([\\s\\S]*?)</a>")
+    private val QESEN_PATTERN =
+        Pattern.compile("href=\"https://qesen\\.net/krmzi\\?post=([^\"]+)\"")
+    private val LEGACY_SERVER_PATTERN =
+        Pattern.compile("<li[^>]*data-name=\"([^\"]*)\"[^>]*data-server=\"([^\"]*)\"")
+    private val IFRAME_PATTERN = Pattern.compile("<iframe[^>]+src=\"([^\"]+)\"")
+    private val OK_OPTIONS_PATTERN = Pattern.compile("data-options=\"([^\"]+)\"")
+    private val WRAPPER_PATTERN = Pattern.compile("[?&](?:url|link|target)=([^&]+)")
+    private val TAG_PATTERN = Pattern.compile("<[^>]+>")
+    private val WHITESPACE_PATTERN = Pattern.compile("\\s+")
+    private val TITLE_SUFFIX = Regex("\\s*-\\s*قرمزي\\s*$")
+    private val TITLE_EPISODE_TAIL = Regex("الحلقة\\s*\\d+.*")
+    private val EPISODE_URL_NUM = Regex("الحلقة-(\\d+)")
+
+    private val OK_QUALITY_ORDER =
+        listOf("full", "hd", "sd", "low", "lowest", "mobile")
+    private val OK_QUALITY_LABELS = mapOf(
+        "full" to "1080p (Full HD)",
+        "hd" to "720p (HD)",
+        "sd" to "480p (SD)",
+        "low" to "360p",
+        "lowest" to "240p",
+        "mobile" to "144p"
+    )
 }

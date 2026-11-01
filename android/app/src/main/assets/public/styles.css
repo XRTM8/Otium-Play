@@ -1700,3 +1700,200 @@ video::-webkit-media-controls-panel {
   padding: 8px;
   cursor: pointer;
 }
+
+/* ==================== Empty / Skeleton / Media States ==================== */
+.empty-note {
+  grid-column: 1 / -1;
+  width: 100%;
+  padding: 26px 18px;
+  text-align: center;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.7;
+  color: var(--text-dim);
+}
+
+.skeleton-line {
+  width: 72%;
+  height: 12px;
+  border-radius: 6px;
+  flex: 0 0 auto;
+}
+
+.skeleton-poster {
+  width: 100%;
+  aspect-ratio: 16 / 11;
+  border-radius: var(--radius-sm);
+}
+
+.ep-tile .skeleton-line {
+  margin-top: 2px;
+}
+
+.series-tile-body .skeleton-line {
+  width: 82%;
+  height: 11px;
+}
+
+.player-message {
+  max-width: 280px;
+  padding: 18px 20px;
+  text-align: center;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.8;
+  color: var(--text-sub);
+}
+
+img.img-broken {
+  opacity: 0;
+  visibility: hidden;
+}
+
+/* ==================== Series Detail Sheet ==================== */
+.sheet-series-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding-bottom: 4px;
+}
+
+.sheet-poster {
+  flex: 0 0 86px;
+  width: 86px;
+  height: 118px;
+  object-fit: cover;
+  border-radius: var(--radius-xs);
+  background: var(--bg-elevated);
+  border: 1px solid var(--line-subtle);
+}
+
+.sheet-series-copy {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.sheet-series-copy h4 {
+  font-size: 15px;
+  font-weight: 800;
+  line-height: 1.4;
+  color: #fff;
+}
+
+.sheet-series-copy p {
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--text-sub);
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.sheet-section-title {
+  margin-top: 6px;
+  font-size: 13px;
+  font-weight: 800;
+  color: #fff;
+}
+
+.sheet-episode-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.sheet-episode-btn.sheet-row {
+  justify-content: flex-start;
+  min-height: 44px;
+  padding: 10px 12px;
+  font-size: 12px;
+  font-weight: 700;
+  text-align: right;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+/* ==================== Performance & Input Polish ==================== */
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+button,
+[role="button"],
+.sheet-row,
+.ep-tile,
+.series-tile,
+.spotlight-card,
+.dock-btn,
+.genre-pill {
+  touch-action: manipulation;
+}
+
+.content-canvas,
+.search-scroll-area,
+.sheet-content,
+.changelog-container {
+  overscroll-behavior: contain;
+}
+
+.h-carousel {
+  overscroll-behavior-x: contain;
+}
+
+.feed-section {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 320px;
+}
+
+.ep-tile,
+.series-tile,
+.spotlight-card {
+  contain: layout paint style;
+}
+
+.bottom-dock,
+.top-nav {
+  contain: layout style;
+}
+
+.sheet-panel {
+  contain: layout style;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .ep-tile:hover,
+  .series-tile:hover {
+    transform: translateY(-2px);
+  }
+
+  .sheet-row:hover {
+    background: var(--bg-elevated);
+    border-color: var(--line-hover);
+  }
+
+  .sheet-row.active:hover {
+    background: var(--accent-soft);
+    border-color: var(--accent);
+  }
+
+  .check-update-btn:hover,
+  .update-later-btn:hover {
+    color: #fff;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}

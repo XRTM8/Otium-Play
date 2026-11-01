@@ -2,8 +2,10 @@ package com.krmzi.app
 
 import android.annotation.SuppressLint
 import android.app.PictureInPictureParams
+import android.content.ComponentCallbacks2
 import android.content.Intent
 import android.content.pm.ActivityInfo
+import android.content.pm.ApplicationInfo
 import android.content.res.Configuration
 import android.graphics.Color
 import android.net.Uri
@@ -22,6 +24,7 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.webkit.WebViewAssetLoader
+import java.io.ByteArrayInputStream
 import java.net.HttpURLConnection
 import java.net.URL
 import org.json.JSONObject
@@ -30,44 +33,66 @@ class MainActivity : AppCompatActivity() {
 
     private companion object {
         const val TAG = "KrmziMainActivity"
+        const val APP_URL = "https://appassets.androidplatform.net/assets/public/index.html"
+        const val FALLBACK_VERSION_NAME = "1.1.0"
+        const val FALLBACK_VERSION_CODE = 8L
     }
 
     private lateinit var webView: WebView
     private lateinit var container: FrameLayout
+    private lateinit var assetLoader: WebViewAssetLoader
     private var customView: View? = null
     private var customViewCallback: WebChromeClient.CustomViewCallback? = null
     private var isVideoPlaying = false
+    private var isDestroyed = false
 
-    // Javascript Interface Bridge for direct, zero-CORS communication
+    /* ------------------------------------------------------------------ */
+    /*  JavaScript bridge                                                  */
+    /* ------------------------------------------------------------------ */
+
     inner class KrmziBridge {
         @JavascriptInterface
-        fun getEpisodes(page: Int): String {
-            return KrmziScraper.getEpisodes(page)
-        }
+        fun getHome(page: Int): String = KrmziScraper.getHome(page)
 
         @JavascriptInterface
-        fun getSeries(page: Int): String {
-            return KrmziScraper.getSeries(page)
-        }
+        fun getEpisodes(page: Int): String = KrmziScraper.getEpisodes(page)
 
         @JavascriptInterface
-        fun getSeriesDetail(url: String): String {
-            return KrmziScraper.getSeriesDetail(url)
-        }
+        fun getSeries(page: Int): String = KrmziScraper.getSeries(page)
 
         @JavascriptInterface
-        fun getEpisodeDetail(url: String): String {
-            return KrmziScraper.getEpisodeDetail(url)
-        }
+        fun getSeriesDetail(url: String): String = KrmziScraper.getSeriesDetail(url)
 
         @JavascriptInterface
-        fun search(query: String): String {
-            return KrmziScraper.getSearch(query)
-        }
+        fun getEpisodeDetail(url: String): String = KrmziScraper.getEpisodeDetail(url)
+
+        @JavascriptInterface
+        fun search(query: String): String = KrmziScraper.getSearch(query)
+
+        @JavascriptInterface
+        fun getHealth(): String = KrmziScraper.getHealth()
 
         @JavascriptInterface
         fun setVideoPlaying(playing: Boolean) {
-            isVideoPlaying = playing
+            runOnUiThread {
+                isVideoPlaying = playing
+                try {
+                    if (playing) {
+                        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                            setPictureInPictureParams(
+                                PictureInPictureParams.Builder()
+                                    .setAspectRatio(Rational(16, 9))
+                                    .build()
+                            )
+                        }
+                    } else {
+                        window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "Unable to update playback flags: ${e.message}")
+                }
+            }
         }
 
         @JavascriptInterface
@@ -91,78 +116,83 @@ class MainActivity : AppCompatActivity() {
         @JavascriptInterface
         fun getAppVersion(): String {
             return try {
-                val pInfo = packageManager.getPackageInfo(packageName, 0)
-                val vName = pInfo.versionName ?: "1.0.3"
-                val vCode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                    pInfo.longVersionCode
+                val info = packageManager.getPackageInfo(packageName, 0)
+                val versionName = info.versionName ?: FALLBACK_VERSION_NAME
+                val versionCode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                    info.longVersionCode
                 } else {
                     @Suppress("DEPRECATION")
-                    pInfo.versionCode.toLong()
+                    info.versionCode.toLong()
                 }
                 JSONObject().apply {
-                    put("versionName", vName)
-                    put("versionCode", vCode)
+                    put("versionName", versionName)
+                    put("versionCode", versionCode)
                 }.toString()
-            } catch (e: Exception) {
-                """{"versionName":"1.0.3","versionCode":4}"""
+            } catch (_: Exception) {
+                """{"versionName":"$FALLBACK_VERSION_NAME","versionCode":$FALLBACK_VERSION_CODE}"""
             }
         }
 
         @JavascriptInterface
         fun checkForUpdates(): String {
+            var connection: HttpURLConnection? = null
             return try {
                 val url = URL("https://api.github.com/repos/XRTM8/krmzi-app/releases/latest")
                 val conn = (url.openConnection() as HttpURLConnection).apply {
-                    connectTimeout = 8000
-                    readTimeout = 8000
+                    connectTimeout = 8_000
+                    readTimeout = 8_000
                     setRequestProperty("User-Agent", "KrmziApp-Android")
                     setRequestProperty("Accept", "application/vnd.github.v3+json")
                 }
+                connection = conn
                 val code = conn.responseCode
-                if (code == 200) {
-                    val body = conn.inputStream.bufferedReader().use { it.readText() }
-                    val json = JSONObject(body)
-                    val tagName = json.optString("tag_name", "").replace("v", "").trim()
-                    val releaseName = json.optString("name", "تحديث جديد")
-                    val releaseNotes = json.optString("body", "")
-
-                    var apkUrl = ""
-                    val assets = json.optJSONArray("assets")
-                    if (assets != null && assets.length() > 0) {
-                        for (i in 0 until assets.length()) {
-                            val asset = assets.getJSONObject(i)
-                            val name = asset.optString("name", "")
-                            if (name.endsWith(".apk", ignoreCase = true)) {
-                                apkUrl = asset.optString("browser_download_url", "")
-                                break
-                            }
-                        }
-                    }
-                    if (apkUrl.isEmpty()) {
-                        apkUrl = json.optString("html_url", "https://github.com/XRTM8/krmzi-app/releases/latest")
-                    }
-
-                    val pInfo = packageManager.getPackageInfo(packageName, 0)
-                    val currentVersion = (pInfo.versionName ?: "1.0.3").replace("v", "").trim()
-
-                    val hasUpdate = isNewerVersion(currentVersion, tagName)
-
-                    JSONObject().apply {
-                        put("hasUpdate", hasUpdate)
-                        put("currentVersion", currentVersion)
-                        put("latestVersion", tagName)
-                        put("releaseName", releaseName)
-                        put("changelog", releaseNotes)
-                        put("downloadUrl", apkUrl)
-                        put("isSuccess", true)
-                    }.toString()
-                } else {
-                    JSONObject().apply {
+                if (code != 200) {
+                    return JSONObject().apply {
                         put("hasUpdate", false)
                         put("error", "HTTP $code")
                         put("isSuccess", false)
                     }.toString()
                 }
+
+                val body = conn.inputStream.bufferedReader().use { it.readText() }
+                val json = JSONObject(body)
+                val tagName = json.optString("tag_name", "").replace("v", "").trim()
+                val releaseName = json.optString("name", "تحديث جديد")
+                val releaseNotes = json.optString("body", "")
+
+                var apkUrl = ""
+                val assets = json.optJSONArray("assets")
+                if (assets != null) {
+                    for (i in 0 until assets.length()) {
+                        val asset = assets.optJSONObject(i) ?: continue
+                        val name = asset.optString("name", "")
+                        if (name.endsWith(".apk", ignoreCase = true)) {
+                            apkUrl = asset.optString("browser_download_url", "")
+                            break
+                        }
+                    }
+                }
+                if (apkUrl.isEmpty()) {
+                    apkUrl = json.optString(
+                        "html_url",
+                        "https://github.com/XRTM8/krmzi-app/releases/latest"
+                    )
+                }
+
+                val info = packageManager.getPackageInfo(packageName, 0)
+                val currentVersion = (info.versionName ?: FALLBACK_VERSION_NAME)
+                    .replace("v", "")
+                    .trim()
+
+                JSONObject().apply {
+                    put("hasUpdate", isNewerVersion(currentVersion, tagName))
+                    put("currentVersion", currentVersion)
+                    put("latestVersion", tagName)
+                    put("releaseName", releaseName)
+                    put("changelog", releaseNotes)
+                    put("downloadUrl", apkUrl)
+                    put("isSuccess", true)
+                }.toString()
             } catch (e: Exception) {
                 Log.e(TAG, "Update check error: ${e.message}")
                 JSONObject().apply {
@@ -170,6 +200,8 @@ class MainActivity : AppCompatActivity() {
                     put("error", e.message)
                     put("isSuccess", false)
                 }.toString()
+            } finally {
+                connection?.disconnect()
             }
         }
 
@@ -177,10 +209,13 @@ class MainActivity : AppCompatActivity() {
         fun openDownloadUrl(downloadUrl: String) {
             runOnUiThread {
                 try {
-                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(downloadUrl)).apply {
-                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    }
-                    startActivity(intent)
+                    val uri = Uri.parse(downloadUrl)
+                    if (uri.scheme != "https" && uri.scheme != "http") return@runOnUiThread
+                    startActivity(
+                        Intent(Intent.ACTION_VIEW, uri).apply {
+                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        }
+                    )
                 } catch (e: Exception) {
                     Log.e(TAG, "Failed to launch download URL: ${e.message}")
                 }
@@ -190,33 +225,28 @@ class MainActivity : AppCompatActivity() {
 
     private fun isNewerVersion(current: String, latest: String): Boolean {
         if (latest.isEmpty()) return false
-        val currParts = current.split(".").mapNotNull { it.toIntOrNull() }
-        val lateParts = latest.split(".").mapNotNull { it.toIntOrNull() }
-        val maxLen = maxOf(currParts.size, lateParts.size)
-        for (i in 0 until maxLen) {
-            val c = currParts.getOrElse(i) { 0 }
-            val l = lateParts.getOrElse(i) { 0 }
+        val currentParts = current.split(".").mapNotNull { it.toIntOrNull() }
+        val latestParts = latest.split(".").mapNotNull { it.toIntOrNull() }
+        val maxLength = maxOf(currentParts.size, latestParts.size)
+        for (i in 0 until maxLength) {
+            val c = currentParts.getOrElse(i) { 0 }
+            val l = latestParts.getOrElse(i) { 0 }
             if (l > c) return true
             if (l < c) return false
         }
         return false
     }
 
+    /* ------------------------------------------------------------------ */
+    /*  Lifecycle                                                          */
+    /* ------------------------------------------------------------------ */
+
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        KrmziScraper.init(applicationContext)
 
-        // Make window edge-to-edge with Hardware Acceleration
-        try {
-            WindowCompat.setDecorFitsSystemWindows(window, false)
-            window.statusBarColor = Color.TRANSPARENT
-            window.navigationBarColor = Color.BLACK
-            window.addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS)
-            window.setFlags(
-                WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,
-                WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED
-            )
-        } catch (_: Exception) {}
+        configureWindow()
 
         container = FrameLayout(this).apply {
             layoutParams = ViewGroup.LayoutParams(
@@ -226,39 +256,61 @@ class MainActivity : AppCompatActivity() {
             setBackgroundColor(Color.parseColor("#060709"))
         }
 
+        assetLoader = WebViewAssetLoader.Builder()
+            .setDomain("appassets.androidplatform.net")
+            .addPathHandler("/assets/", WebViewAssetLoader.AssetsPathHandler(this))
+            .build()
+
+        createWebView()
+        container.addView(webView)
+        setContentView(container)
+
+        configureWebView()
+        setupBackHandler()
+        webView.loadUrl(APP_URL)
+    }
+
+    private fun configureWindow() {
+        try {
+            WindowCompat.setDecorFitsSystemWindows(window, false)
+            window.statusBarColor = Color.TRANSPARENT
+            window.navigationBarColor = Color.BLACK
+            window.addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS)
+            window.setFlags(
+                WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,
+                WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED
+            )
+            window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
+        } catch (e: Exception) {
+            Log.w(TAG, "Window configuration failed: ${e.message}")
+        }
+    }
+
+    @SuppressLint("SetJavaScriptEnabled")
+    private fun createWebView() {
         webView = WebView(this).apply {
             layoutParams = ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT
             )
             setBackgroundColor(Color.TRANSPARENT)
+            setLayerType(View.LAYER_TYPE_HARDWARE, null)
+            overScrollMode = View.OVER_SCROLL_NEVER
+            isVerticalScrollBarEnabled = false
+            isHorizontalScrollBarEnabled = false
         }
-
-        container.addView(webView)
-        setContentView(container)
-
-        // Modern Google WebView Asset Loader for secure HTTPS assets
-        val assetLoader = WebViewAssetLoader.Builder()
-            .setDomain("appassets.androidplatform.net")
-            .addPathHandler("/assets/", WebViewAssetLoader.AssetsPathHandler(this))
-            .build()
-
-        configureWebView(assetLoader)
-        setupBackHandler()
-
-        // Load application through official Android HTTPS asset loader
-        webView.loadUrl("https://appassets.androidplatform.net/assets/public/index.html")
     }
 
     @SuppressLint("SetJavaScriptEnabled")
-    private fun configureWebView(assetLoader: WebViewAssetLoader) {
+    private fun configureWebView() {
         val settings = webView.settings
         settings.javaScriptEnabled = true
         settings.domStorageEnabled = true
         settings.databaseEnabled = true
-        settings.allowFileAccess = true
-        settings.allowContentAccess = true
+        settings.allowFileAccess = false
+        settings.allowContentAccess = false
         settings.loadsImagesAutomatically = true
+        settings.blockNetworkImage = false
         settings.mediaPlaybackRequiresUserGesture = false
         settings.setSupportMultipleWindows(false)
         settings.javaScriptCanOpenWindowsAutomatically = false
@@ -266,18 +318,35 @@ class MainActivity : AppCompatActivity() {
         settings.useWideViewPort = true
         settings.loadWithOverviewMode = true
         settings.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+        settings.builtInZoomControls = false
+        settings.displayZoomControls = false
+        settings.setSupportZoom(false)
+        settings.setGeolocationEnabled(false)
+        settings.setNeedInitialFocus(false)
+        settings.textZoom = 100
+        settings.userAgentString =
+            (settings.userAgentString ?: "Mozilla/5.0") + " KrmziApp/$FALLBACK_VERSION_NAME"
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            settings.offscreenPreRaster = true
+        }
 
-        // Enable cookies & third-party cookies for iframe streaming players
+        try {
+            val debugBuild = (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
+            WebView.setWebContentsDebuggingEnabled(debugBuild)
+        } catch (_: Exception) {
+        }
+
+        // Cookies are required by several embedded video providers.
         try {
             val cookieManager = CookieManager.getInstance()
             cookieManager.setAcceptCookie(true)
             cookieManager.setAcceptThirdPartyCookies(webView, true)
-        } catch (_: Exception) {}
+        } catch (e: Exception) {
+            Log.w(TAG, "Cookie configuration failed: ${e.message}")
+        }
 
-        // Register Native JavaScript Bridge
         webView.addJavascriptInterface(KrmziBridge(), "KrmziBridge")
 
-        // Configure Chrome Client
         webView.webChromeClient = object : WebChromeClient() {
             override fun onCreateWindow(
                 view: WebView?,
@@ -285,11 +354,15 @@ class MainActivity : AppCompatActivity() {
                 isUserGesture: Boolean,
                 resultMsg: android.os.Message?
             ): Boolean {
-                // Strictly block external popups from third-party ad networks
+                // Third-party ad networks must never open popups.
                 return false
             }
 
             override fun onShowCustomView(view: View?, callback: CustomViewCallback?) {
+                if (view == null) {
+                    callback?.onCustomViewHidden()
+                    return
+                }
                 if (customView != null) {
                     callback?.onCustomViewHidden()
                     return
@@ -297,67 +370,80 @@ class MainActivity : AppCompatActivity() {
                 customView = view
                 customViewCallback = callback
                 webView.visibility = View.GONE
-                container.addView(view)
+                (view.parent as? ViewGroup)?.removeView(view)
+                container.addView(
+                    view,
+                    FrameLayout.LayoutParams(
+                        FrameLayout.LayoutParams.MATCH_PARENT,
+                        FrameLayout.LayoutParams.MATCH_PARENT
+                    )
+                )
                 hideSystemBars(true)
             }
 
             override fun onHideCustomView() {
-                if (customView == null) return
+                val view = customView ?: return
                 webView.visibility = View.VISIBLE
-                container.removeView(customView)
+                container.removeView(view)
                 customView = null
                 customViewCallback?.onCustomViewHidden()
+                customViewCallback = null
                 hideSystemBars(false)
+            }
+
+            override fun onConsoleMessage(message: ConsoleMessage?): Boolean {
+                val msg = message ?: return true
+                if (msg.messageLevel() == ConsoleMessage.MessageLevel.ERROR) {
+                    Log.w(TAG, "WebView console: ${msg.message()} @${msg.lineNumber()}")
+                }
+                return true
             }
         }
 
-        // Configure WebViewClient with Asset Loader & CORS-enabled Scraper interception
         webView.webViewClient = object : WebViewClient() {
             override fun shouldInterceptRequest(
                 view: WebView?,
                 request: WebResourceRequest?
             ): WebResourceResponse? {
-                val reqUri = request?.url ?: return null
-                val path = reqUri.path ?: ""
-                val host = reqUri.host?.lowercase() ?: ""
+                val requestUri = request?.url ?: return null
+                val host = requestUri.host?.lowercase() ?: ""
+                val path = requestUri.path ?: ""
+                val isLocalApp = host == "appassets.androidplatform.net" ||
+                    host == "localhost" ||
+                    host == "127.0.0.1"
 
-                // 1. Intercept relative or absolute /api/ requests ONLY for local app
-                val isLocalApp = host == "appassets.androidplatform.net" || host == "localhost" || host == "127.0.0.1" || host.isEmpty()
-                if (isLocalApp && path.contains("/api/")) {
+                if (isLocalApp && path.startsWith("/api/")) {
+                    if (request.method.equals("OPTIONS", ignoreCase = true)) {
+                        return corsResponse(204, "No Content", "")
+                    }
                     return try {
-                        val json = KrmziScraper.handle(reqUri.toString())
-                        val headers = mutableMapOf(
-                            "Access-Control-Allow-Origin" to "*",
-                            "Access-Control-Allow-Methods" to "GET, POST, OPTIONS",
-                            "Access-Control-Allow-Headers" to "*",
-                            "Cache-Control" to "no-cache"
-                        )
+                        val json = KrmziScraper.handle(requestUri.toString())
                         WebResourceResponse(
                             "application/json",
                             "UTF-8",
                             200,
                             "OK",
-                            headers,
+                            corsHeaders(),
                             json.byteInputStream(Charsets.UTF_8)
                         )
                     } catch (e: Exception) {
-                        Log.e(TAG, "Scraper interception error: ${e.message}")
+                        Log.e(TAG, "Scraper interception error: ${e.message}", e)
+                        val body = JSONObject()
+                            .put("error", e.message ?: "Internal error")
+                            .toString()
                         WebResourceResponse(
                             "application/json",
                             "UTF-8",
                             500,
                             "Internal Error",
-                            mapOf("Access-Control-Allow-Origin" to "*"),
-                            """{"error":"${e.message}"}""".byteInputStream(Charsets.UTF_8)
+                            corsHeaders(),
+                            body.byteInputStream(Charsets.UTF_8)
                         )
                     }
                 }
 
-                // 2. Delegate to AndroidX Asset Loader
-                val assetResponse = assetLoader.shouldInterceptRequest(reqUri)
-                if (assetResponse != null) {
-                    return assetResponse
-                }
+                val assetResponse = assetLoader.shouldInterceptRequest(requestUri)
+                if (assetResponse != null) return assetResponse
 
                 return super.shouldInterceptRequest(view, request)
             }
@@ -366,21 +452,28 @@ class MainActivity : AppCompatActivity() {
                 view: WebView?,
                 request: WebResourceRequest?
             ): Boolean {
-                val url = request?.url?.toString()?.lowercase() ?: ""
+                val url = request?.url?.toString()?.lowercase() ?: return true
 
-                // 1. Allow internal app asset navigation
-                if (url.startsWith("https://appassets.androidplatform.net") || url.startsWith("file://")) {
+                if (url.startsWith("https://appassets.androidplatform.net") ||
+                    url.startsWith("file://") ||
+                    url.startsWith("about:blank")
+                ) {
                     return false
                 }
 
-                // 2. Allow ALL subframe requests (video players, iframes, chunks, CDNs)
-                if (request?.isForMainFrame == false) {
-                    return false
-                }
+                // Video players and CDNs live in subframes; never block those.
+                if (request?.isForMainFrame == false) return false
 
-                // 3. Prevent external sites or ads from hijacking the main application window
                 Log.d(TAG, "Prevented external navigation on main frame: $url")
                 return true
+            }
+
+            override fun onPageFinished(view: WebView?, url: String?) {
+                super.onPageFinished(view, url)
+                view?.evaluateJavascript(
+                    "document.documentElement.classList.add('krmzi-native');",
+                    null
+                )
             }
 
             override fun onReceivedError(
@@ -390,11 +483,73 @@ class MainActivity : AppCompatActivity() {
             ) {
                 super.onReceivedError(view, request, error)
                 if (request?.isForMainFrame == true) {
-                    Log.w(TAG, "MainFrame error: ${error?.description}")
+                    Log.w(TAG, "Main frame error: ${error?.description}")
                 }
+            }
+
+            override fun onReceivedHttpError(
+                view: WebView?,
+                request: WebResourceRequest?,
+                errorResponse: WebResourceResponse?
+            ) {
+                super.onReceivedHttpError(view, request, errorResponse)
+                if (request?.isForMainFrame == true) {
+                    Log.w(TAG, "Main frame HTTP ${errorResponse?.statusCode} for ${request.url}")
+                }
+            }
+
+            override fun onRenderProcessGone(
+                view: WebView?,
+                detail: RenderProcessGoneDetail?
+            ): Boolean {
+                Log.e(TAG, "WebView renderer gone (crashed=${detail?.didCrash()})")
+                if (!isDestroyed) recreateWebView()
+                return true
             }
         }
     }
+
+    private fun corsHeaders(): MutableMap<String, String> = mutableMapOf(
+        "Access-Control-Allow-Origin" to "*",
+        "Access-Control-Allow-Methods" to "GET, POST, OPTIONS",
+        "Access-Control-Allow-Headers" to "*",
+        "Cache-Control" to "no-store",
+        "X-Krmzi-Native" to "1"
+    )
+
+    private fun corsResponse(status: Int, reason: String, body: String): WebResourceResponse =
+        WebResourceResponse(
+            "application/json",
+            "UTF-8",
+            status,
+            reason,
+            corsHeaders(),
+            ByteArrayInputStream(body.toByteArray(Charsets.UTF_8))
+        )
+
+    private fun recreateWebView() {
+        try {
+            container.removeView(webView)
+            webView.stopLoading()
+            webView.removeJavascriptInterface("KrmziBridge")
+            webView.destroy()
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to destroy crashed WebView: ${e.message}")
+        }
+
+        customView = null
+        customViewCallback = null
+        isVideoPlaying = false
+
+        createWebView()
+        container.addView(webView)
+        configureWebView()
+        webView.loadUrl(APP_URL)
+    }
+
+    /* ------------------------------------------------------------------ */
+    /*  Navigation                                                         */
+    /* ------------------------------------------------------------------ */
 
     private fun setupBackHandler() {
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
@@ -403,24 +558,24 @@ class MainActivity : AppCompatActivity() {
                     webView.webChromeClient?.onHideCustomView()
                     return
                 }
+                if (!::webView.isInitialized || isDestroyed) {
+                    finish()
+                    return
+                }
 
                 webView.evaluateJavascript(
                     """
                     (function() {
-                        const sheet = document.getElementById('sheetBackdrop');
-                        if (sheet && !sheet.classList.contains('hidden')) {
-                            sheet.classList.add('hidden');
+                        if (window.krmziIsSheetOpen && window.krmziIsSheetOpen()) {
+                            window.krmziCloseSheet();
                             return true;
                         }
-                        const player = document.getElementById('mobilePlayer');
-                        if (player && !player.classList.contains('hidden')) {
-                            const btn = document.getElementById('dismissPlayerBtn');
-                            if (btn) btn.click();
+                        if (window.krmziIsPlayerOpen && window.krmziIsPlayerOpen()) {
+                            window.krmziClosePlayer();
                             return true;
                         }
-                        const search = document.getElementById('searchOverlay');
-                        if (search && !search.classList.contains('hidden')) {
-                            search.classList.add('hidden');
+                        if (window.krmziIsSearchOpen && window.krmziIsSearchOpen()) {
+                            window.krmziCloseSearch();
                             return true;
                         }
                         return false;
@@ -436,15 +591,21 @@ class MainActivity : AppCompatActivity() {
         })
     }
 
+    /* ------------------------------------------------------------------ */
+    /*  Picture-in-picture, insets and memory                              */
+    /* ------------------------------------------------------------------ */
+
     override fun onUserLeaveHint() {
         super.onUserLeaveHint()
-        // Only enter Picture-in-Picture when an actual video is active
         if (isVideoPlaying && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             try {
-                val params = PictureInPictureParams.Builder()
-                    .setAspectRatio(Rational(16, 9))
-                    .build()
-                enterPictureInPictureMode(params)
+                if (!isInPictureInPictureMode) {
+                    enterPictureInPictureMode(
+                        PictureInPictureParams.Builder()
+                            .setAspectRatio(Rational(16, 9))
+                            .build()
+                    )
+                }
             } catch (e: Exception) {
                 Log.w(TAG, "PiP error: ${e.message}")
             }
@@ -456,30 +617,86 @@ class MainActivity : AppCompatActivity() {
         newConfig: Configuration
     ) {
         super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
+        if (!::webView.isInitialized || isDestroyed) return
         val script = if (isInPictureInPictureMode) {
-            "document.getElementById('playerHudTop')?.classList.add('hud-hidden'); document.getElementById('playerHudBottom')?.classList.add('hud-hidden');"
+            "document.getElementById('playerHudTop')?.classList.add('hud-hidden');" +
+                "document.getElementById('playerHudBottom')?.classList.add('hud-hidden');"
         } else {
-            "document.getElementById('playerHudTop')?.classList.remove('hud-hidden'); document.getElementById('playerHudBottom')?.classList.remove('hud-hidden');"
+            "document.getElementById('playerHudTop')?.classList.remove('hud-hidden');" +
+                "document.getElementById('playerHudBottom')?.classList.remove('hud-hidden');"
         }
         webView.evaluateJavascript(script, null)
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
-        if (hasFocus) {
-            hideSystemBars(false)
-        }
+        if (hasFocus) hideSystemBars(false)
     }
 
     private fun hideSystemBars(fullscreen: Boolean) {
         try {
             val controller = WindowCompat.getInsetsController(window, window.decorView)
-            controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            controller.systemBarsBehavior =
+                WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
             if (fullscreen) {
                 controller.hide(WindowInsetsCompat.Type.systemBars())
             } else {
                 controller.hide(WindowInsetsCompat.Type.statusBars())
             }
-        } catch (_: Exception) {}
+        } catch (e: Exception) {
+            Log.w(TAG, "Unable to update system bars: ${e.message}")
+        }
+    }
+
+    override fun onPause() {
+        if (::webView.isInitialized) {
+            webView.onPause()
+            webView.pauseTimers()
+        }
+        try {
+            CookieManager.getInstance().flush()
+        } catch (_: Exception) {
+        }
+        super.onPause()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (::webView.isInitialized) {
+            webView.onResume()
+            webView.resumeTimers()
+        }
+    }
+
+    override fun onLowMemory() {
+        super.onLowMemory()
+        if (::webView.isInitialized) webView.clearCache(false)
+        KrmziScraper.trimMemory()
+    }
+
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        if (level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW) {
+            if (::webView.isInitialized) webView.clearCache(false)
+            KrmziScraper.trimMemory()
+        }
+    }
+
+    override fun onDestroy() {
+        isDestroyed = true
+        try {
+            if (::webView.isInitialized) {
+                webView.stopLoading()
+                webView.removeJavascriptInterface("KrmziBridge")
+                webView.loadUrl("about:blank")
+                webView.clearHistory()
+                webView.removeAllViews()
+                webView.destroy()
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "WebView cleanup failed: ${e.message}")
+        }
+        KrmziScraper.clearMemoryCache()
+        super.onDestroy()
     }
 }
