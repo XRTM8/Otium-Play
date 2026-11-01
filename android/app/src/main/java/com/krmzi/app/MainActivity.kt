@@ -34,8 +34,8 @@ class MainActivity : AppCompatActivity() {
     private companion object {
         const val TAG = "KrmziMainActivity"
         const val APP_URL = "https://appassets.androidplatform.net/assets/public/index.html"
-        const val FALLBACK_VERSION_NAME = "1.1.0"
-        const val FALLBACK_VERSION_CODE = 8L
+        const val FALLBACK_VERSION_NAME = "1.1.1"
+        const val FALLBACK_VERSION_CODE = 9L
     }
 
     private lateinit var webView: WebView
@@ -411,6 +411,10 @@ class MainActivity : AppCompatActivity() {
                 val isLocalApp = host == "appassets.androidplatform.net" ||
                     host == "localhost" ||
                     host == "127.0.0.1"
+
+                if (isLocalApp && path == "/api/media") {
+                    return KrmziScraper.mediaResponse(requestUri.getQueryParameter("url") ?: "", request.requestHeaders["Range"] ?: request.requestHeaders["range"])
+                }
 
                 if (isLocalApp && path.startsWith("/api/")) {
                     if (request.method.equals("OPTIONS", ignoreCase = true)) {

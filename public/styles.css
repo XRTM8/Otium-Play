@@ -38,6 +38,8 @@
 }
 
 html, body {
+  width: 100%;
+  height: 100%;
   background-color: #000000;
   color: var(--text-main);
   min-height: 100vh;
@@ -56,6 +58,7 @@ html, body {
 
 /* ==================== App Frame Viewport ==================== */
 .app-frame {
+  flex: 0 0 auto;
   width: 100%;
   max-width: 430px;
   height: 100vh;
@@ -749,6 +752,7 @@ html, body {
 }
 
 .video-stage {
+  flex: 0 0 auto;
   position: relative;
   width: 100%;
   aspect-ratio: 16 / 9;
@@ -756,7 +760,30 @@ html, body {
   overflow: hidden;
 }
 
+.player-backdrop {
+  position: absolute;
+  inset: 0;
+  background-color: #090b10;
+  background-position: center;
+  background-size: cover;
+  pointer-events: none;
+  transition: opacity 0.2s ease;
+}
+
+.player-backdrop::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, rgba(0,0,0,0.45), rgba(0,0,0,0.82));
+}
+
+.player-screen.video-playing .player-backdrop {
+  opacity: 0;
+}
+
 .video-elem {
+  position: absolute;
+  inset: 0;
   width: 100%;
   height: 100%;
   object-fit: contain;
@@ -971,10 +998,71 @@ video::-webkit-media-controls-panel {
   position: absolute;
   inset: 0;
   z-index: 10;
-  background: rgba(0, 0, 0, 0.7);
+  background: rgba(0, 0, 0, 0.22);
   display: flex;
   align-items: center;
   justify-content: center;
+  flex-direction: column;
+  gap: 14px;
+  padding: 18px;
+  text-align: center;
+  pointer-events: auto;
+}
+
+.player-load-status {
+  width: 100%;
+  max-width: 280px;
+  color: #e6e8ef;
+  font-size: 14px;
+  line-height: 1.6;
+  text-align: center;
+}
+
+.player-screen.player-loading .player-center-ctrl {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.player-retry-btn {
+  flex: 0 0 auto;
+  min-height: 44px;
+  padding: 10px 20px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-xs);
+  background: var(--accent);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.player-retry-actions {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+}
+
+.player-retry-actions .player-retry-btn {
+  padding-inline: 12px;
+  font-size: 13px;
+}
+
+.player-screen.player-error .player-bar-bottom,
+.player-screen.player-error .hud-center-title {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.player-screen.player-error .player-loader {
+  padding: 48px 12px 12px;
+  gap: 8px;
+}
+
+.player-screen.player-error .player-message {
+  padding: 0;
+  font-size: 13px;
+  line-height: 1.6;
 }
 
 /* Player Top HUD */
@@ -1167,6 +1255,7 @@ video::-webkit-media-controls-panel {
 /* Episodes Drawer beneath player */
 .player-sub-drawer {
   flex: 1;
+  min-height: 0;
   background: var(--bg-core);
   border-top: 1px solid var(--line-subtle);
   padding: 14px 18px;
@@ -1197,6 +1286,7 @@ video::-webkit-media-controls-panel {
   gap: 8px;
   overflow-x: auto;
   padding-bottom: 6px;
+  flex: 0 0 auto;
 }
 
 .drawer-pill {
@@ -1210,6 +1300,7 @@ video::-webkit-media-controls-panel {
   border-radius: var(--radius-sm);
   cursor: pointer;
   transition: all 0.2s;
+  min-height: 44px;
 }
 
 .drawer-pill.active {
@@ -1282,6 +1373,8 @@ video::-webkit-media-controls-panel {
   border-radius: var(--radius-sm);
   padding: 8px 12px;
   margin-bottom: 8px;
+  gap: 12px;
+  flex: 0 0 auto;
 }
 
 .drawer-server-info {
@@ -1289,6 +1382,8 @@ video::-webkit-media-controls-panel {
   align-items: center;
   gap: 6px;
   font-size: 12px;
+  min-width: 0;
+  flex-wrap: wrap;
 }
 
 .drawer-server-info .d-label {
@@ -1302,6 +1397,8 @@ video::-webkit-media-controls-panel {
 }
 
 .drawer-switch-server-btn {
+  flex: 0 0 auto;
+  min-height: 44px;
   background: var(--accent);
   color: #fff;
   border: none;
@@ -1322,10 +1419,18 @@ video::-webkit-media-controls-panel {
 }
 
 /* Landscape Mode Responsive Enhancements */
-@media (orientation: landscape) {
+@media (orientation: landscape) and (max-height: 600px) {
+  .app-frame {
+    max-width: none;
+    height: 100vh;
+    height: 100dvh;
+    border: 0;
+    border-radius: 0;
+  }
   .player-screen .video-stage {
     height: 100vh !important;
-    max-height: 100vh !important;
+    height: 100dvh !important;
+    max-height: 100dvh !important;
     aspect-ratio: auto !important;
   }
   .player-sub-drawer {
@@ -1344,7 +1449,6 @@ video::-webkit-media-controls-panel {
   position: absolute;
   inset: 0;
   background: rgba(0, 0, 0, 0.65);
-  backdrop-filter: blur(10px);
   z-index: 90;
   display: flex;
   align-items: flex-end;
@@ -1365,7 +1469,9 @@ video::-webkit-media-controls-panel {
   display: flex;
   flex-direction: column;
   gap: 14px;
-  max-height: 70vh;
+  min-height: 0;
+  max-height: 85%;
+  overflow: hidden;
   animation: panel-up 0.3s var(--ease-spring);
 }
 
@@ -1375,6 +1481,7 @@ video::-webkit-media-controls-panel {
 }
 
 .sheet-grabber {
+  flex: 0 0 auto;
   width: 32px;
   height: 4px;
   border-radius: 4px;
@@ -1386,14 +1493,22 @@ video::-webkit-media-controls-panel {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex: 0 0 auto;
+  gap: 12px;
 }
 
 .sheet-head h3 {
   font-size: 15px;
   font-weight: 800;
+  min-width: 0;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
 }
 
 .sheet-x-btn {
+  flex: 0 0 44px;
+  width: 44px;
+  height: 44px;
   background: transparent;
   border: none;
   color: var(--text-dim);
@@ -1402,13 +1517,19 @@ video::-webkit-media-controls-panel {
 }
 
 .sheet-content {
+  min-height: 0;
+  flex: 1 1 auto;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: 8px;
+  -webkit-overflow-scrolling: touch;
 }
 
 .sheet-row {
+  flex: 0 0 auto;
+  min-height: 48px;
+  width: 100%;
   padding: 12px 14px;
   border-radius: var(--radius-sm);
   background: var(--bg-surface);
@@ -1420,7 +1541,15 @@ video::-webkit-media-controls-panel {
   align-items: center;
   justify-content: space-between;
   cursor: pointer;
-  transition: all 0.2s;
+  gap: 12px;
+  line-height: 1.5;
+  text-align: right;
+  transition: background-color 0.15s, border-color 0.15s, color 0.15s;
+}
+
+.sheet-row > span:first-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .sheet-row.active {
@@ -1430,6 +1559,8 @@ video::-webkit-media-controls-panel {
 }
 
 .sheet-pill {
+  flex: 0 0 auto;
+  white-space: nowrap;
   font-size: 10px;
   padding: 2px 7px;
   border-radius: 20px;
@@ -1752,6 +1883,7 @@ img.img-broken {
 
 /* ==================== Series Detail Sheet ==================== */
 .sheet-series-head {
+  flex: 0 0 auto;
   display: flex;
   align-items: flex-start;
   gap: 12px;
@@ -1794,6 +1926,7 @@ img.img-broken {
 }
 
 .sheet-section-title {
+  flex: 0 0 auto;
   margin-top: 6px;
   font-size: 13px;
   font-weight: 800;
@@ -1801,6 +1934,7 @@ img.img-broken {
 }
 
 .sheet-episode-grid {
+  flex: 0 0 auto;
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
@@ -1845,24 +1979,56 @@ button,
   overscroll-behavior-x: contain;
 }
 
-.feed-section {
-  content-visibility: auto;
-  contain-intrinsic-size: auto 320px;
+.app-frame:fullscreen,
+.app-frame:-webkit-full-screen {
+  width: 100%;
+  max-width: none;
+  height: 100%;
+  border: 0;
+  border-radius: 0;
 }
 
-.ep-tile,
-.series-tile,
-.spotlight-card {
-  contain: layout paint style;
+.app-frame:fullscreen .video-stage,
+.app-frame:-webkit-full-screen .video-stage,
+.video-stage:fullscreen,
+.video-stage:-webkit-full-screen {
+  width: 100%;
+  height: 100%;
+  max-height: none;
+  aspect-ratio: auto;
 }
 
-.bottom-dock,
-.top-nav {
-  contain: layout style;
+.app-frame:fullscreen .player-sub-drawer,
+.app-frame:-webkit-full-screen .player-sub-drawer {
+  display: none;
 }
 
-.sheet-panel {
-  contain: layout style;
+@media (orientation: landscape) {
+  .sheet-scrim {
+    justify-content: center;
+  }
+
+  .sheet-panel {
+    width: min(560px, 100%);
+    max-height: calc(100% - var(--safe-top) - 12px);
+    padding-bottom: calc(var(--safe-bottom) + 12px);
+    gap: 8px;
+  }
+}
+
+@media (max-width: 350px) {
+  .sheet-panel {
+    padding-inline: 12px;
+  }
+
+  .sheet-row {
+    padding-inline: 10px;
+    gap: 8px;
+  }
+
+  .sheet-episode-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 @media (hover: hover) and (pointer: fine) {

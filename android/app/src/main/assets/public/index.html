@@ -21,7 +21,7 @@
   <link rel="stylesheet" href="fonts/tajawal.css">
   <link rel="stylesheet" href="vendor/fontawesome/css/all.min.css">
 
-  <link rel="stylesheet" href="styles.css?v=1.1.0">
+  <link rel="stylesheet" href="styles.css?v=1.1.1">
 </head>
 <body>
 
@@ -141,7 +141,7 @@
             </div>
             <div class="version-text">
               <span class="v-label">إصدار التطبيق</span>
-              <span class="v-val" id="installedVersionText">v1.1.0</span>
+              <span class="v-val" id="installedVersionText">v1.1.1</span>
             </div>
           </div>
           <button class="check-update-btn" id="manualCheckUpdateBtn">
@@ -198,6 +198,7 @@
       
       <!-- Video Stage -->
       <div class="video-stage" id="playerCanvas">
+        <div class="player-backdrop" id="playerBackdrop" aria-hidden="true"></div>
         <!-- Native Direct Video Stream (Hidden by default to eliminate any Chromium broken play icon) -->
         <video id="nativePlayer" playsinline webkit-playsinline preload="none" referrerpolicy="no-referrer" class="video-elem hidden"></video>
 
@@ -321,11 +322,11 @@
 
     <!-- Apple-style Bottom Sheet -->
     <div class="sheet-scrim hidden" id="sheetBackdrop">
-      <div class="sheet-panel" id="bottomSheet">
+      <div class="sheet-panel" id="bottomSheet" role="dialog" aria-modal="true" aria-labelledby="sheetTitle">
         <div class="sheet-grabber"></div>
         <div class="sheet-head">
           <h3 id="sheetTitle">الخيارات</h3>
-          <button class="sheet-x-btn" id="closeSheetBtn"><i class="fa-solid fa-xmark"></i></button>
+          <button class="sheet-x-btn" id="closeSheetBtn" aria-label="إغلاق القائمة"><i class="fa-solid fa-xmark"></i></button>
         </div>
         <div class="sheet-content" id="sheetBody"></div>
       </div>
@@ -357,6 +358,7 @@
 
   </div>
 
-  <script src="app.js?v=1.1.0" defer></script>
+  <script src="vendor/hls/hls.min.js" defer></script>
+  <script src="app.js?v=1.1.1" defer></script>
 </body>
 </html>

@@ -5,6 +5,7 @@ import android.net.Uri
 import android.util.Base64
 import android.util.Log
 import okhttp3.Cache
+import okhttp3.Call
 import okhttp3.ConnectionPool
 import okhttp3.Dispatcher
 import okhttp3.OkHttpClient
@@ -14,9 +15,11 @@ import org.json.JSONObject
 import java.io.File
 import java.net.URLDecoder
 import java.net.URLEncoder
+import java.util.Collections
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ExecutorService
+import java.util.concurrent.ExecutorCompletionService
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
@@ -41,12 +44,21 @@ object KrmziScraper {
     private const val HOME_TTL_MS = 2 * 60 * 1000L
     private const val DETAIL_TTL_MS = 10 * 60 * 1000L
     private const val SEARCH_TTL_MS = 10 * 60 * 1000L
+    private const val STREAM_TTL_MS = 45 * 1000L
 
     private val threadCounter = AtomicInteger(0)
     private val ioPool: ExecutorService = Executors.newFixedThreadPool(4) { runnable ->
         Thread(runnable, "krmzi-io-${threadCounter.incrementAndGet()}").apply {
             isDaemon = true
             priority = Thread.NORM_PRIORITY
+        }
+    }
+
+    // Keep provider extraction independent of the home/list request pool.
+    // A slow mirror must not hold up ordinary app navigation.
+    private val streamPool: ExecutorService = Executors.newFixedThreadPool(3) { runnable ->
+        Thread(runnable, "krmzi-stream-${threadCounter.incrementAndGet()}").apply {
+            isDaemon = true
         }
     }
 
@@ -255,7 +267,7 @@ object KrmziScraper {
         for (flags in candidates) {
             try {
                 val text = String(Base64.decode(value, flags), Charsets.UTF_8)
-                if (text.contains("http") || text.contains("krmzi.org")) return text
+                if (text.isNotBlank()) return text
             } catch (_: Exception) {
                 /* try the next decoder */
             }
@@ -385,7 +397,7 @@ object KrmziScraper {
                 }
                 path.contains("/api/episode/detail") -> {
                     val url = uri.getQueryParameter("url") ?: ""
-                    getEpisodeDetail(url)
+                    getEpisodeDetail(url, uri.getQueryParameter("fresh") == "1")
                 }
                 path.contains("/api/health") -> getHealth()
                 else -> errorJson("Unknown endpoint: $path")
@@ -527,10 +539,13 @@ object KrmziScraper {
         }
     }
 
-    fun getEpisodeDetail(epUrl: String): String {
+    fun getEpisodeDetail(epUrl: String, forceRefresh: Boolean = false): String {
         if (!isKrmziUrl(epUrl)) return errorJson("Invalid episode URL")
-        return cached("ep_detail_${epUrl.hashCode()}", DETAIL_TTL_MS) {
+        val cacheKey = "ep_detail_${epUrl.hashCode()}"
+        if (forceRefresh) memoryCache.remove(cacheKey)
+        return cached(cacheKey, STREAM_TTL_MS) {
             val html = fetchHtml(epUrl)
+            if (html.isBlank()) return@cached errorJson("Unable to load episode")
             val title = extractTitle(html)
             val episodeNum = EPISODE_URL_NUM.find(epUrl)?.groupValues?.get(1) ?: ""
             val poster = extractPoster(html)
@@ -584,23 +599,39 @@ object KrmziScraper {
                 }
             }
 
-            // Extract OK.ru streams for every OK server concurrently.
+            // Resolve in parallel but return as soon as ONE mirror is usable.
+            // A shared deadline bounds the whole operation, including queueing.
             val okServers = rawServerList.filter { it.first.equals("ok", ignoreCase = true) }
             val okStreams = ConcurrentHashMap<String, JSONArray>()
             if (okServers.isNotEmpty()) {
-                val futures = okServers.map { (_, id) ->
-                    CompletableFuture.runAsync({
+                val providerCalls = Collections.synchronizedList(mutableListOf<Call>())
+                val completions = ExecutorCompletionService<Pair<String, JSONArray>>(streamPool)
+                val futures = okServers.take(3).map { (_, id) ->
+                    completions.submit(java.util.concurrent.Callable {
                         val streams = JSONArray()
-                        if (extractOkDirectStreams(id, streams)) {
-                            okStreams[id] = streams
-                        }
-                    }, ioPool)
+                        extractOkDirectStreams(id, streams, providerCalls)
+                        Pair(id, streams)
+                    })
                 }
-                futures.forEach { future ->
-                    try {
-                        future.get(20, TimeUnit.SECONDS)
-                    } catch (e: Exception) {
-                        Log.w(TAG, "OK.ru extraction timed out: ${e.message}")
+                val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(6_500)
+                try {
+                    for (ignored in futures.indices) {
+                        val remaining = deadline - System.nanoTime()
+                        if (remaining <= 0) break
+                        val finished = completions.poll(remaining, TimeUnit.NANOSECONDS) ?: break
+                        val (id, streams) = finished.get()
+                        if (streams.length() > 0) {
+                            okStreams[id] = streams
+                            break
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "OK.ru extraction stopped: ${e.message}")
+                } finally {
+                    futures.forEach { if (!it.isDone) it.cancel(true) }
+                    synchronized(providerCalls) {
+                        providerCalls.forEach { it.cancel() }
+                        providerCalls.clear()
                     }
                 }
             }
@@ -708,7 +739,11 @@ object KrmziScraper {
         }
     }
 
-    private fun extractOkDirectStreams(sId: String, directStreams: JSONArray): Boolean {
+    private fun extractOkDirectStreams(
+        sId: String,
+        directStreams: JSONArray,
+        providerCalls: MutableList<Call>
+    ): Boolean {
         return try {
             val request = Request.Builder()
                 .url("https://ok.ru/videoembed/$sId")
@@ -717,8 +752,23 @@ object KrmziScraper {
                 .header("Accept-Language", "ar,en-US;q=0.9,en;q=0.8")
                 .build()
 
-            val okHtml = client.newCall(request).execute().use { response ->
-                if (response.isSuccessful) response.body?.string() ?: "" else ""
+            val providerClient = client.newBuilder()
+                .connectTimeout(4, TimeUnit.SECONDS)
+                .readTimeout(6, TimeUnit.SECONDS)
+                .callTimeout(6, TimeUnit.SECONDS)
+                .retryOnConnectionFailure(false)
+                .build()
+            val providerCall = providerClient.newCall(request)
+            synchronized(providerCalls) {
+                if (Thread.currentThread().isInterrupted) return false
+                providerCalls.add(providerCall)
+            }
+            val okHtml = try {
+                providerCall.execute().use { response ->
+                    if (response.isSuccessful) response.body?.string() ?: "" else ""
+                }
+            } finally {
+                providerCalls.remove(providerCall)
             }
             if (okHtml.isEmpty()) return false
 
@@ -736,8 +786,16 @@ object KrmziScraper {
                     else -> null
                 } ?: return false
 
-            val videos = metadata.optJSONArray("videos") ?: return false
-            if (videos.length() == 0) return false
+            val hlsManifestUrl = metadata.optString("hlsManifestUrl", "")
+            if (hlsManifestUrl.startsWith("https://") || hlsManifestUrl.startsWith("http://")) {
+                directStreams.put(JSONObject().apply {
+                    put("quality", "تلقائي")
+                    put("type", "hls")
+                    put("url", hlsManifestUrl)
+                })
+            }
+            val videos = metadata.optJSONArray("videos") ?: return directStreams.length() > 0
+            if (videos.length() == 0) return directStreams.length() > 0
 
             val videoList = ArrayList<JSONObject>(videos.length())
             for (i in 0 until videos.length()) {
@@ -759,6 +817,62 @@ object KrmziScraper {
             Log.w(TAG, "Failed OK.ru extract for $sId: ${e.message}")
             false
         }
+    }
+
+    private fun safeMediaUrl(raw: String): java.net.URI? = try {
+        val uri = java.net.URI(raw)
+        val host = uri.host?.lowercase() ?: ""
+        if (uri.scheme == "https" && uri.userInfo == null && (uri.port == -1 || uri.port == 443) &&
+            listOf("okcdn.ru", "vkuser.net").any { host == it || host.endsWith(".$it") }) uri else null
+    } catch (_: Exception) { null }
+
+    fun mediaResponse(raw: String, range: String?): android.webkit.WebResourceResponse {
+        val error = { android.webkit.WebResourceResponse("text/plain", "UTF-8", 502, "Bad Gateway",
+            mutableMapOf("Cache-Control" to "no-store"), "Media unavailable".byteInputStream()) }
+        var target = safeMediaUrl(raw) ?: return error()
+        val mediaClient = client.newBuilder().followRedirects(false).followSslRedirects(false)
+            .callTimeout(20, TimeUnit.SECONDS).build()
+        var response: okhttp3.Response? = null
+        try {
+            for (redirects in 0..5) {
+                val request = Request.Builder().url(target.toString())
+                    .header("User-Agent", USER_AGENT).header("Origin", "https://ok.ru")
+                    .header("Referer", "https://ok.ru/")
+                    .apply { if (range != null) header("Range", range) }.build()
+                val current = mediaClient.newCall(request).execute()
+                response = current
+                if (current.code !in 300..399) break
+                val next = current.header("Location")?.let { safeMediaUrl(target.resolve(it).toString()) }
+                current.close()
+                if (next == null || redirects == 5) return error()
+                target = next
+            }
+            val upstream = response ?: return error()
+            if (!upstream.isSuccessful) { upstream.close(); return error() }
+            val type = upstream.header("Content-Type")?.substringBefore(';') ?: "video/mp2t"
+            val headers = mutableMapOf("Cache-Control" to "no-store", "Access-Control-Allow-Origin" to "*")
+            for (name in listOf("Content-Range", "Accept-Ranges")) upstream.header(name)?.let { headers[name] = it }
+            if (type.contains("mpegurl", true) || target.path.endsWith(".m3u8")) {
+                val text = upstream.use { it.body?.string() ?: "" }
+                fun proxy(uri: String): String {
+                    val resolved = safeMediaUrl(target.resolve(uri).toString()) ?: throw IllegalArgumentException("Invalid media host")
+                    return "/api/media?url=" + URLEncoder.encode(resolved.toString(), "UTF-8")
+                }
+                val rewritten = text.lines().joinToString("\n") { line ->
+                    when {
+                        line.isBlank() -> line
+                        line.startsWith("#") -> Regex("URI=\"([^\"]+)\"").replace(line) { "URI=\"${proxy(it.groupValues[1])}\"" }
+                        else -> proxy(line.trim())
+                    }
+                }
+                return android.webkit.WebResourceResponse("application/vnd.apple.mpegurl", "UTF-8", 200, "OK", headers, rewritten.byteInputStream())
+            }
+            val body = upstream.body ?: run { upstream.close(); return error() }
+            val input = object : java.io.FilterInputStream(body.byteStream()) {
+                override fun close() { try { super.close() } finally { upstream.close() } }
+            }
+            return android.webkit.WebResourceResponse(type, null, upstream.code, if (upstream.code == 206) "Partial Content" else "OK", headers, input)
+        } catch (_: Exception) { response?.close(); return error() }
     }
 
     private fun errorJson(message: String): String =

@@ -5,7 +5,8 @@
   "main": "index.js",
   "scripts": {
     "start": "node server.js",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "node --test tests/stream-resolution.test.js tests/media-proxy.test.js",
+    "test:ui": "node tests/frontend-player.test.cjs"
   },
   "keywords": [],
   "author": "",
@@ -14,6 +15,7 @@
   "dependencies": {
     "compression": "^1.8.2",
     "cors": "^2.8.6",
-    "express": "^5.3.0"
+    "express": "^5.3.0",
+    "hls.js": "1.7.4"
   }
 }

@@ -10,9 +10,10 @@ const MAX_API_ENTRIES = 80;
 const SHELL_ASSETS = [
   './',
   './index.html',
-  './styles.css?v=1.1.0',
-  './app.js?v=1.1.0',
+  './styles.css?v=1.1.1',
+  './app.js?v=1.1.1',
   './manifest.json',
+  './vendor/hls/hls.min.js',
   './icons/icon-192.png',
   './icons/icon-512.png',
   './fonts/tajawal.css',

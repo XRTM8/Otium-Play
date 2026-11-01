@@ -12,7 +12,7 @@
  */
 
 (() => {
-  const APP_VERSION = '1.1.0';
+  const APP_VERSION = '1.1.1';
   const FAVS_KEY = 'krmzi_favs';
   const HIST_KEY = 'krmzi_hist';
   const PREF_QUALITY_KEY = 'krmzi_pref_quality';
@@ -66,6 +66,7 @@
     favorites: readJSON(FAVS_KEY, []),
     history: readJSON(HIST_KEY, []),
     preferredQuality: readString(PREF_QUALITY_KEY, '1080p (Full HD)'),
+    qualityMode: readString('krmzi_quality_mode', 'auto'),
     hudTimeout: null,
     autoNextTimerId: null,
     autoNextCancelled: false,
@@ -290,7 +291,7 @@
     '/api/episodes': 120_000,
     '/api/series': 300_000,
     '/api/series/detail': 600_000,
-    '/api/episode/detail': 300_000,
+    '/api/episode/detail': 0,
     '/api/search': 300_000,
   };
 
@@ -313,6 +314,10 @@
    * background thread, so this stays completely off the UI thread.
    */
   async function apiCall(endpoint, params = {}, options = {}) {
+    // Stream links expire and can be tied to the current network address.
+    if (endpoint === '/api/episode/detail') {
+      options = { ...options, noCache: true, noStaleFallback: true };
+    }
     const key = apiCacheKey(endpoint, params);
     const ttl = options.cacheTtl ?? API_TTL[endpoint] ?? 120_000;
     const cached = apiCache.get(key);
@@ -856,105 +861,144 @@
   /* ------------------------------------------------------------------ */
 
   let directWatchdogTimer = null;
-  let currentDirectIndex = 0;
   let embedSpinnerTimer = null;
-  let directStreamProgressed = false;
+  let playbackAttempt = 0;
+  let playbackSession = 0;
+  let metadataHandler = null;
+  let episodeRetryUsed = false;
+  let activeEpisodeUrl = '';
+  let seriesContext = null;
+  let attemptQueue = [];
+  let attemptPosition = 0;
+  let pendingResumeTime = 0;
+  let pendingPaused = false;
+  let hlsPlayer = null;
 
   function clearDirectWatchdog() {
-    if (directWatchdogTimer) {
-      clearTimeout(directWatchdogTimer);
-      directWatchdogTimer = null;
-    }
+    clearInterval(directWatchdogTimer);
+    directWatchdogTimer = null;
   }
 
-  function resetSpinner() {
-    playerSpinner.innerHTML = '<div class="spinner-ring"></div>';
+  function resetSpinner(message = 'جاري تجهيز الفيديو…') {
+    mobilePlayer.classList.remove('player-error');
+    playerSpinner.innerHTML = `<div class="spinner-ring"></div><p class="player-load-status" role="status">${escapeHtml(message)}</p>`;
+    mobilePlayer.classList.add('player-loading');
   }
 
-  function setPlayerMessage(message, color = '') {
-    playerSpinner.innerHTML = `<p class="player-message"${
-      color ? ` style="color:${color}"` : ''
-    }>${escapeHtml(message)}</p>`;
+  function setPlayerMessage(message) {
+    mobilePlayer.classList.add('player-loading', 'player-error');
+    playerSpinner.innerHTML = `<p class="player-message" role="status">${escapeHtml(message)}</p><div class="player-retry-actions"><button class="player-retry-btn" data-player-retry>إعادة المحاولة</button><button class="player-retry-btn" data-player-servers>اختيار السيرفر</button></div>`;
     playerSpinner.classList.remove('hidden');
+    showHud(false);
   }
 
-  async function openEpisode(epUrl) {
-    if (!epUrl) return;
+  function normalizedTitle(title) {
+    return String(title || '').replace(/^مسلسل\s+/, '').replace(/الحلقة\s*\d+.*/, '').trim();
+  }
 
+  function findEpisodeContext(url) {
+    const known = [...state.episodes, ...state.history, ...state.favorites].find((item) => item.url === url);
+    const title = normalizedTitle(known?.seriesTitle || known?.title);
+    const series = seriesContext?.episodes?.some((item) => item.url === url)
+      ? seriesContext
+      : state.series.find((item) => title && normalizedTitle(item.title) === title);
+    return { known, series };
+  }
+
+  function setPlayerBackdrop(url) {
+    const backdrop = $('playerBackdrop');
+    if (!backdrop) return;
+    // Reuse art already present in the catalogue; never set video.poster.
+    backdrop.style.backgroundImage = url ? `url(${JSON.stringify(url)})` : '';
+  }
+
+  async function openEpisode(epUrl, fresh = false) {
+    if (!epUrl) return;
+    saveHistory(true);
     state.playerAbort?.abort();
     const controller = new AbortController();
     state.playerAbort = controller;
+    const session = ++playbackSession;
+    activeEpisodeUrl = epUrl;
+    episodeRetryUsed = fresh;
+    const context = findEpisodeContext(epUrl);
 
-    mobilePlayer.classList.remove('hidden');
     resetPlayer();
-    resetSpinner();
+    state.currentEpisode = null;
+    state.currentSeriesEpisodes = [];
+    drawerEpisodesCarousel.innerHTML = '';
+    drawerCount.textContent = 'جاري جلب الحلقات…';
+    mobilePlayer.classList.remove('hidden');
+    setPlayerBackdrop(context.series?.poster || context.series?.thumbnail || context.known?.thumbnail || '');
+    resetSpinner('جاري الاتصال بسيرفر الحلقة…');
     playerSpinner.classList.remove('hidden');
-    hudEpTitle.textContent = 'جاري التحميل...';
-    hudSeriesTitle.textContent = '';
+    hudEpTitle.textContent = context.known?.title || 'جاري تحميل الحلقة…';
+    hudSeriesTitle.textContent = context.series?.title || context.known?.seriesTitle || '';
+    showHud(false);
 
     try {
-      const episode = await apiCall(
-        '/api/episode/detail',
-        { url: epUrl },
-        { signal: controller.signal, cacheTtl: API_TTL['/api/episode/detail'] }
-      );
-      if (controller.signal.aborted) return;
+      const episode = await apiCall('/api/episode/detail',
+        { url: epUrl, ...(fresh ? { fresh: 1 } : {}) },
+        { signal: controller.signal, timeout: 22000 });
+      if (controller.signal.aborted || session !== playbackSession) return;
+      if (episode.error || episode.isSuccess === false) throw new Error(episode.error || 'No episode');
 
+      // Keep catalogue art; the episode-page poster is not requested at all.
+      episode.artwork = context.series?.poster || context.series?.thumbnail || context.known?.thumbnail || '';
       state.currentEpisode = episode;
-      state.currentSeriesEpisodes = [];
-
-      // Pin the latest watched episode immediately.
       saveHistory(true);
-
       hudEpTitle.textContent = episode.title || '';
-      hudSeriesTitle.textContent = episode.episodeNum
-        ? `الحلقة ${episode.episodeNum}`
-        : '';
+      hudSeriesTitle.textContent = context.series?.title || context.known?.seriesTitle || (episode.episodeNum ? `الحلقة ${episode.episodeNum}` : '');
       refreshFavState();
 
-      if (episode.seriesUrl) loadDrawer(episode.seriesUrl, episode.url);
-
       if (episode.directStreams?.length) {
-        const preferredIndex = episode.directStreams.findIndex(
-          (stream) => stream.quality === state.preferredQuality
-        );
-        playDirectStream(episode.directStreams, preferredIndex >= 0 ? preferredIndex : 0);
+        playDirectStream(episode.directStreams);
       } else if (episode.servers?.length) {
         playSandboxedEmbed(episode.servers[0]);
       } else {
-        setPlayerMessage('لم تتوفر سيرفرات بث لهذه الحلقة.');
+        setPlayerMessage('لم تتوفر سيرفرات لهذه الحلقة. جرّب إعادة المحاولة.');
       }
+      // Playback starts before the auxiliary episode-list request.
+      if (episode.seriesUrl) loadDrawer(episode.seriesUrl, episode.url, session);
     } catch (error) {
-      if (error?.name === 'AbortError') return;
-      console.error('Failed to open episode:', error);
-      setPlayerMessage('تعذر تشغيل الحلقة. تحقق من الاتصال.', '#ff5555');
+      if (controller.signal.aborted || session !== playbackSession) return;
+      console.warn('Failed to open episode:', error);
+      setPlayerMessage('تعذر الاتصال بسيرفر الحلقة. أعد المحاولة.');
     } finally {
       if (state.playerAbort === controller) state.playerAbort = null;
     }
   }
 
-  function resetPlayer() {
-    clearDirectWatchdog();
-    clearTimeout(embedSpinnerTimer);
-
+  function clearMediaHandlers() {
+    if (hlsPlayer) {
+      hlsPlayer.destroy();
+      hlsPlayer = null;
+    }
     nativePlayer.onerror = null;
     nativePlayer.oncanplay = null;
     nativePlayer.onplaying = null;
     nativePlayer.onprogress = null;
     nativePlayer.onloadeddata = null;
+    if (metadataHandler) nativePlayer.removeEventListener('loadedmetadata', metadataHandler);
+    metadataHandler = null;
+  }
+
+  function resetPlayer() {
+    ++playbackAttempt;
+    clearDirectWatchdog();
+    clearTimeout(embedSpinnerTimer);
+    clearMediaHandlers();
     embedPlayer.onload = null;
     embedPlayer.onerror = null;
-
     nativePlayer.pause();
     nativePlayer.removeAttribute('src');
+    nativePlayer.removeAttribute('poster');
     nativePlayer.load();
     nativePlayer.classList.add('hidden');
     nativePlayer.playbackRate = 1;
-
     embedPlayer.classList.add('hidden');
     embedPlayer.removeAttribute('src');
-    mobilePlayer.classList.remove('embed-mode');
-
+    mobilePlayer.classList.remove('embed-mode', 'video-playing', 'player-error');
     timelineProgress.style.width = '0%';
     timelineLoaded.style.width = '0%';
     timelineThumb.style.right = '100%';
@@ -967,184 +1011,254 @@
     state.skipIntroVisible = false;
     state.activeQuality = null;
     state.activeServer = null;
-
+    pendingResumeTime = 0;
+    pendingPaused = false;
     activeServerLabel.textContent = 'السيرفر';
-    activeQualityLabel.textContent = state.preferredQuality || 'تلقائي';
+    activeQualityLabel.textContent = state.qualityMode === 'auto' ? 'تلقائي' : state.preferredQuality;
     if (drawerActiveServerName) drawerActiveServerName.textContent = 'تلقائي';
-
-    if (state.drawerAbort) {
-      state.drawerAbort.abort();
-      state.drawerAbort = null;
-    }
+    state.drawerAbort?.abort();
+    state.drawerAbort = null;
   }
 
-  function playDirectStream(streams, index = 0) {
+  function initialStreamIndex(streams) {
+    const adaptive = streams.findIndex((stream) => stream.type === 'hls');
+    if (adaptive >= 0 && (window.Hls?.isSupported() || nativePlayer.canPlayType('application/vnd.apple.mpegurl'))) return adaptive;
+    if (state.qualityMode === 'manual') {
+      const preferred = streams.findIndex((stream) => stream.quality === state.preferredQuality);
+      if (preferred >= 0) return preferred;
+    }
+    // A measured startup profile: smaller rendition on constrained links,
+    // otherwise 720p. Full HD remains one tap away without re-opening the episode.
+    const connection = navigator.connection;
+    const target = connection?.saveData || /(^|-)2g$/.test(connection?.effectiveType || '') ? 480 : 720;
+    const ranked = streams.map((stream, index) => ({ index, height: parseInt(stream.quality, 10) || 0 })).filter((item) => item.height > 0);
+    return (ranked.filter((item) => item.height <= target).sort((a, b) => b.height - a.height)[0]
+      || ranked.sort((a, b) => a.height - b.height)[0])?.index || 0;
+  }
+
+  function playDirectStream(streams, index = initialStreamIndex(streams), options = {}) {
+    if (!streams?.length) return fallbackToEmbedServer();
+    const saved = state.history.find((item) => item.url === state.currentEpisode?.url);
+    pendingResumeTime = options.resumeAt ?? (saved && Number(saved.currentTime) > 10 ? Number(saved.currentTime) : 0);
+    pendingPaused = options.paused ?? false;
+    // Try lower renditions before heavier ones. Limit failed startup attempts
+    // so an unavailable CDN cannot consume a minute of silent retries.
+    const height = parseInt(streams[index]?.quality, 10) || (state.qualityMode === 'manual' ? parseInt(state.preferredQuality, 10) : 720);
+    const rest = streams.map((stream, i) => ({ i, height: parseInt(stream.quality, 10) || 0 }))
+      .filter((item) => item.i !== index && streams[item.i].type !== 'hls')
+      .sort((a, b) => (a.height > height) - (b.height > height) || b.height - a.height);
+    attemptQueue = [index, ...rest.map((item) => item.i)].slice(0, 3);
+    attemptPosition = 0;
+    startDirectAttempt(streams);
+  }
+
+  function startDirectAttempt(streams) {
     clearDirectWatchdog();
     clearTimeout(embedSpinnerTimer);
-    mobilePlayer.classList.remove('embed-mode');
+    clearMediaHandlers();
+    const selected = streams[attemptQueue[attemptPosition]];
+    if (!selected?.url) return fallbackToEmbedServer();
+    const attempt = ++playbackAttempt;
+    const session = playbackSession;
+    let hasPlayed = false;
+    let lastBuffered = 0;
+    let lastTime = pendingResumeTime;
+    let lastAdvance = performance.now();
+    const startedAt = lastAdvance;
+    const isCurrent = () => attempt === playbackAttempt && session === playbackSession && !mobilePlayer.classList.contains('hidden');
+
+    nativePlayer.pause();
+    mobilePlayer.classList.remove('embed-mode', 'video-playing');
     embedPlayer.classList.add('hidden');
     embedPlayer.removeAttribute('src');
-    playerSpinner.classList.remove('hidden');
-    resetSpinner();
-
-    currentDirectIndex = index;
-    directStreamProgressed = false;
-    const selected = streams?.[currentDirectIndex];
-    if (!selected) {
-      fallbackToEmbedServer();
-      return;
-    }
-
-    state.activeQuality = selected;
-    state.activeServer = { name: 'مباشر (بدون إعلانات ⚡)' };
-    activeServerLabel.textContent = 'مباشر ⚡';
-    if (drawerActiveServerName) drawerActiveServerName.textContent = 'مباشر ⚡';
-    activeQualityLabel.textContent = selected.quality || state.preferredQuality;
+    embedPlayer.onload = null;
+    embedPlayer.onerror = null;
     nativePlayer.classList.add('hidden');
+    resetSpinner(attemptPosition ? 'جاري تجربة جودة أخف…' : 'جاري تحميل الفيديو…');
+    playerSpinner.classList.remove('hidden');
+    state.activeQuality = selected;
+    state.activeServer = { name: 'مباشر' };
+    activeServerLabel.textContent = 'مباشر';
+    if (drawerActiveServerName) drawerActiveServerName.textContent = 'مباشر';
+    activeQualityLabel.textContent = state.qualityMode === 'auto' ? `تلقائي · ${selected.quality.split(' ')[0]}` : selected.quality;
     nativePlayer.preload = 'auto';
 
-    nativePlayer.onerror = () => {
-      console.warn(`Direct stream ${selected.quality} failed, trying next...`);
+    const failed = () => {
+      if (!isCurrent()) return;
       clearDirectWatchdog();
-      if (currentDirectIndex + 1 < streams.length) {
-        playDirectStream(streams, currentDirectIndex + 1);
-      } else {
-        fallbackToEmbedServer();
-      }
+      const position = nativePlayer.currentTime;
+      if (Number.isFinite(position) && position > 0) pendingResumeTime = position;
+      if (++attemptPosition < attemptQueue.length) startDirectAttempt(streams);
+      else fallbackToEmbedServer();
     };
-
-    // Only move to the next rendition when the stream is genuinely stuck.
-    // A slow but progressing 1080p download must not be abandoned early.
-    directWatchdogTimer = setTimeout(() => {
-      const stuck =
-        !directStreamProgressed &&
-        nativePlayer.readyState < 2 &&
-        nativePlayer.currentTime === 0;
-      if (stuck) {
-        console.warn(`Direct stream ${selected.quality} stalled, trying next...`);
-        if (currentDirectIndex + 1 < streams.length) {
-          playDirectStream(streams, currentDirectIndex + 1);
-        } else {
-          fallbackToEmbedServer();
-        }
-      }
-    }, 12_000);
-
-    nativePlayer.onprogress = () => {
-      if (nativePlayer.readyState >= 1) directStreamProgressed = true;
-    };
-
-    nativePlayer.onloadeddata = () => {
-      directStreamProgressed = true;
-    };
-
-    nativePlayer.oncanplay = () => {
-      directStreamProgressed = true;
-      clearDirectWatchdog();
-      playerSpinner.classList.add('hidden');
+    const ready = () => {
+      if (!isCurrent()) return;
       nativePlayer.classList.remove('hidden');
+      if (pendingPaused) {
+        playerSpinner.classList.add('hidden');
+        mobilePlayer.classList.remove('player-loading');
+        mobilePlayer.classList.add('video-playing');
+        clearDirectWatchdog();
+        showHud(false);
+      }
     };
-
+    nativePlayer.onerror = failed;
+    nativePlayer.oncanplay = ready;
     nativePlayer.onplaying = () => {
-      directStreamProgressed = true;
-      clearDirectWatchdog();
+      if (!isCurrent()) return;
+      hasPlayed = true;
+      lastAdvance = performance.now();
       playerSpinner.classList.add('hidden');
+      mobilePlayer.classList.remove('player-loading');
+      mobilePlayer.classList.add('video-playing');
       nativePlayer.classList.remove('hidden');
     };
+    metadataHandler = () => {
+      if (!isCurrent()) return;
+      if (pendingResumeTime > 0 && Number.isFinite(nativePlayer.duration)) {
+        nativePlayer.currentTime = Math.min(pendingResumeTime, Math.max(0, nativePlayer.duration - 1));
+      }
+      metadataHandler = null;
+    };
+    nativePlayer.addEventListener('loadedmetadata', metadataHandler, { once: true });
 
-    const saved = state.history.find((item) => item.url === state.currentEpisode?.url);
-    const resumeAt =
-      saved && Number(saved.currentTime) > 10 ? Number(saved.currentTime) : 0;
-    if (resumeAt > 0) {
-      nativePlayer.addEventListener(
-        'loadedmetadata',
-        () => {
-          if (nativePlayer.duration && resumeAt < nativePlayer.duration - 5) {
-            nativePlayer.currentTime = resumeAt;
-          }
-        },
-        { once: true }
-      );
+    directWatchdogTimer = setInterval(() => {
+      if (!isCurrent()) return clearDirectWatchdog();
+      // Hidden tabs and intentional pauses must never trigger a server change.
+      if (document.hidden || (hasPlayed && nativePlayer.paused)) { lastAdvance = performance.now(); return; }
+      const now = performance.now();
+      const end = nativePlayer.buffered.length ? nativePlayer.buffered.end(nativePlayer.buffered.length - 1) : 0;
+      if (end > lastBuffered + 0.1 || nativePlayer.currentTime > lastTime + 0.1) lastAdvance = now;
+      lastBuffered = end;
+      lastTime = nativePlayer.currentTime;
+      if ((!hasPlayed && now - startedAt > 16000) || now - lastAdvance > (hasPlayed ? 14000 : 6500)) failed();
+    }, 1000);
+
+    if (selected.type === 'hls' && window.Hls?.isSupported()) {
+      const engine = new window.Hls({ enableWorker: true, autoStartLoad: false, maxBufferLength: 30, backBufferLength: 30 });
+      hlsPlayer = engine;
+      engine.on(window.Hls.Events.MANIFEST_PARSED, () => {
+        if (!isCurrent()) return;
+        const target = state.qualityMode === 'manual' ? parseInt(state.preferredQuality, 10)
+          : navigator.connection?.saveData || /(^|-)2g$/.test(navigator.connection?.effectiveType || '') ? 480 : 720;
+        const level = engine.levels.map((item, i) => ({ i, height: item.height }))
+          .filter((item) => item.height <= target).sort((a, b) => b.height - a.height)[0]?.i ?? 0;
+        engine.startLevel = level;
+        if (state.qualityMode === 'manual') engine.currentLevel = level;
+        engine.startLoad(pendingResumeTime || -1);
+      });
+      engine.on(window.Hls.Events.LEVEL_SWITCHED, (_, data) => {
+        if (isCurrent() && state.qualityMode === 'auto') activeQualityLabel.textContent = `تلقائي · ${engine.levels[data.level]?.height || ''}p`;
+      });
+      engine.on(window.Hls.Events.ERROR, (_, data) => { if (data.fatal) failed(); });
+      engine.loadSource('/api/media?url=' + encodeURIComponent(selected.url));
+      engine.attachMedia(nativePlayer);
+    } else {
+      nativePlayer.src = selected.type === 'hls' ? '/api/media?url=' + encodeURIComponent(selected.url) : selected.url;
+      nativePlayer.load();
     }
-
-    nativePlayer.src = selected.url;
-    nativePlayer.load();
-    nativePlayer.play().catch((error) => console.warn('Native play blocked:', error));
+    if (!pendingPaused) nativePlayer.play().catch((error) => {
+      if (!isCurrent() || error.name === 'AbortError') return;
+      if (error.name === 'NotAllowedError') {
+        clearDirectWatchdog();
+        mobilePlayer.classList.remove('player-loading');
+        playerSpinner.classList.add('hidden');
+        showHud(false);
+      }
+    });
     showHud();
   }
 
-  function fallbackToEmbedServer() {
+  async function fallbackToEmbedServer() {
     clearDirectWatchdog();
-    const episode = state.currentEpisode;
-    if (episode?.servers?.length) {
-      showPill('fa-rotate', 'تم الانتقال لسيرفر بديل');
-      playSandboxedEmbed(episode.servers[0]);
-    } else {
-      setPlayerMessage('تعذر تشغيل الفيديو من جميع السيرفرات.', '#ff5555');
+    clearMediaHandlers();
+    // Refresh a single time to recover expired/IP-bound links. Preserve position.
+    if (!episodeRetryUsed && state.currentEpisode) {
+      episodeRetryUsed = true;
+      const session = playbackSession;
+      const controller = new AbortController();
+      state.playerAbort?.abort();
+      state.playerAbort = controller;
+      resetSpinner('جاري تجديد رابط المشاهدة…');
+      playerSpinner.classList.remove('hidden');
+      try {
+        const episode = await apiCall('/api/episode/detail', { url: activeEpisodeUrl, fresh: 1 },
+          { signal: controller.signal, timeout: 22000 });
+        if (controller.signal.aborted || session !== playbackSession) return;
+        if (episode.directStreams?.length) {
+          episode.artwork = state.currentEpisode.artwork;
+          state.currentEpisode = episode;
+          playDirectStream(episode.directStreams, initialStreamIndex(episode.directStreams), { resumeAt: pendingResumeTime, paused: pendingPaused });
+          return;
+        }
+      } catch (_) { /* use known alternate servers below */ }
+      finally { if (state.playerAbort === controller) state.playerAbort = null; }
+      if (controller.signal.aborted || session !== playbackSession) return;
     }
+    const servers = state.currentEpisode?.servers || [];
+    if (servers.length) {
+      showPill('fa-rotate', 'تم الانتقال لسيرفر بديل');
+      playSandboxedEmbed(servers[0]);
+    } else setPlayerMessage('تعذر تشغيل الفيديو. جرّب إعادة المحاولة أو سيرفراً آخر.');
   }
 
   function playSandboxedEmbed(server) {
     if (!server?.embedUrl) return;
+    ++playbackAttempt;
     clearDirectWatchdog();
     clearTimeout(embedSpinnerTimer);
-
+    clearMediaHandlers();
     nativePlayer.pause();
     nativePlayer.removeAttribute('src');
     nativePlayer.load();
     nativePlayer.classList.add('hidden');
+    resetSpinner('جاري فتح السيرفر البديل…');
     playerSpinner.classList.remove('hidden');
-    resetSpinner();
-
+    mobilePlayer.classList.remove('video-playing');
     mobilePlayer.classList.add('embed-mode');
     embedPlayer.classList.remove('hidden');
-    embedPlayer.src = server.embedUrl;
-
-    embedSpinnerTimer = setTimeout(() => playerSpinner.classList.add('hidden'), 4500);
+    // Give users a bounded recovery path; iframe load is not video playback.
+    embedSpinnerTimer = setTimeout(() => setPlayerMessage('إذا لم يبدأ الفيديو، اختر سيرفراً آخر أو أعد المحاولة.'), 15000);
     embedPlayer.onload = () => {
       clearTimeout(embedSpinnerTimer);
       playerSpinner.classList.add('hidden');
+      mobilePlayer.classList.remove('player-loading');
     };
     embedPlayer.onerror = () => {
       clearTimeout(embedSpinnerTimer);
-      setPlayerMessage('تعذر تحميل السيرفر. جرّب سيرفراً آخر.', '#ff5555');
+      setPlayerMessage('تعذر تحميل السيرفر. جرّب سيرفراً آخر.');
     };
-
+    embedPlayer.src = server.embedUrl;
     state.activeServer = server;
     activeServerLabel.textContent = server.name || 'سيرفر';
-    if (drawerActiveServerName) {
-      drawerActiveServerName.textContent = server.name || 'سيرفر';
-    }
-    activeQualityLabel.textContent = 'تلقائي';
+    if (drawerActiveServerName) drawerActiveServerName.textContent = server.name || 'سيرفر';
+    activeQualityLabel.textContent = 'من السيرفر';
     showHud(false);
   }
 
   function switchStreamQuality(url, qualityName) {
-    if (!url) return;
-    const currentTime = nativePlayer.currentTime;
-    const wasPlaying = !nativePlayer.paused;
+    const streams = state.currentEpisode?.directStreams || [];
+    const index = streams.findIndex((stream) => stream.url === url);
+    if (index < 0) return;
+    const resumeAt = nativePlayer.currentTime || 0;
+    const paused = mobilePlayer.classList.contains('embed-mode') ? false : nativePlayer.paused;
     state.preferredQuality = qualityName;
+    state.qualityMode = 'manual';
     try {
       localStorage.setItem(PREF_QUALITY_KEY, qualityName);
-    } catch {
-      /* ignore quota errors */
+      localStorage.setItem('krmzi_quality_mode', 'manual');
+    } catch (_) { /* preferences are best effort */ }
+    if (hlsPlayer?.levels.length) {
+      const height = parseInt(qualityName, 10);
+      const level = hlsPlayer.levels.findIndex((item) => item.height === height);
+      if (level >= 0) {
+        hlsPlayer.nextLevel = level;
+        state.activeQuality = { quality: qualityName, url };
+        activeQualityLabel.textContent = qualityName;
+        return;
+      }
     }
-
-    const resumeAt = Number.isFinite(currentTime) ? currentTime : 0;
-    nativePlayer.addEventListener(
-      'loadedmetadata',
-      () => {
-        if (resumeAt > 0) nativePlayer.currentTime = resumeAt;
-      },
-      { once: true }
-    );
-    nativePlayer.src = url;
-    nativePlayer.load();
-    if (wasPlaying) nativePlayer.play().catch(() => {});
-    state.activeQuality = { quality: qualityName, url };
-    activeQualityLabel.textContent = qualityName;
-    playerSpinner.classList.remove('hidden');
-    resetSpinner();
+    playDirectStream(streams, index, { resumeAt, paused });
   }
 
   /* ------------------------------------------------------------------ */
@@ -1274,7 +1388,7 @@
       seriesUrl: episode.seriesUrl || '',
       episodeNum: episode.episodeNum || '',
       url: episode.url,
-      thumbnail: episode.poster || '',
+      thumbnail: episode.artwork || '',
       currentTime: current,
       duration,
       updatedAt: now,
@@ -1287,7 +1401,7 @@
     );
     if (index >= 0) {
       const previous = state.history[index];
-      if (current === 0 && Number(previous.currentTime) > 0) {
+      if (previous.url === item.url && current === 0 && Number(previous.currentTime) > 0) {
         item.currentTime = previous.currentTime;
         item.duration = previous.duration;
       }
@@ -1307,20 +1421,10 @@
 
   function closePlayer() {
     saveHistory(true, { render: true });
-    clearDirectWatchdog();
-    clearTimeout(embedSpinnerTimer);
-    clearTimeout(state.autoNextTimerId);
-    state.autoNextTimerId = null;
-
-    nativePlayer.pause();
-    nativePlayer.removeAttribute('src');
-    nativePlayer.load();
-    nativePlayer.classList.add('hidden');
-    embedPlayer.classList.add('hidden');
-    embedPlayer.removeAttribute('src');
-    embedPlayer.onload = null;
-    embedPlayer.onerror = null;
-    mobilePlayer.classList.remove('embed-mode');
+    ++playbackSession;
+    state.playerAbort?.abort();
+    resetPlayer();
+    activeEpisodeUrl = '';
     mobilePlayer.classList.add('hidden');
     playerSpinner.classList.add('hidden');
 
@@ -1332,10 +1436,11 @@
     state.currentSeriesEpisodes = [];
     state.activeServer = null;
     state.activeQuality = null;
-    state.playerAbort?.abort();
+    renderHistory();
+    if (state.activeTab === 'library') renderLibrary();
   }
 
-  async function loadDrawer(seriesUrl, currentEpisodeUrl) {
+  async function loadDrawer(seriesUrl, currentEpisodeUrl, session = playbackSession) {
     state.drawerAbort?.abort();
     const controller = new AbortController();
     state.drawerAbort = controller;
@@ -1352,8 +1457,13 @@
         { url: seriesUrl },
         { signal: controller.signal, cacheTtl: API_TTL['/api/series/detail'] }
       );
-      if (controller.signal.aborted) return;
+      if (controller.signal.aborted || session !== playbackSession) return;
 
+      seriesContext = series;
+      if (state.currentEpisode?.url === currentEpisodeUrl && !state.currentEpisode.artwork) {
+        state.currentEpisode.artwork = series.poster || '';
+        setPlayerBackdrop(series.poster || '');
+      }
       state.currentSeriesEpisodes = series.episodes || [];
       drawerCount.textContent = `${state.currentSeriesEpisodes.length} حلقة`;
       drawerEpisodesCarousel.innerHTML = state.currentSeriesEpisodes
@@ -1390,7 +1500,7 @@
       state.favorites.unshift({
         title: episode.title,
         url: episode.url,
-        thumbnail: episode.poster,
+        thumbnail: episode.artwork || '',
       });
       if (state.favorites.length > 100) state.favorites.length = 100;
     }
@@ -1651,8 +1761,11 @@
     });
 
     nativePlayer.addEventListener('playing', () => {
+      if (mobilePlayer.classList.contains('hidden') || mobilePlayer.classList.contains('embed-mode') || !nativePlayer.getAttribute('src')) return;
       playerSpinner.classList.add('hidden');
       nativePlayer.classList.remove('hidden');
+      mobilePlayer.classList.remove('player-loading');
+      mobilePlayer.classList.add('video-playing');
     });
 
     nativePlayer.addEventListener('ended', () => {
@@ -1687,8 +1800,8 @@
       haptic();
       if (!document.fullscreenElement) {
         const request =
-          playerCanvas.requestFullscreen || playerCanvas.webkitRequestFullscreen;
-        request?.call(playerCanvas)?.catch?.(() => {});
+          $('appFrame').requestFullscreen || $('appFrame').webkitRequestFullscreen;
+        request?.call($('appFrame'))?.catch?.(() => {});
         bridge('setLandscape', true);
       } else {
         const exit = document.exitFullscreen || document.webkitExitFullscreen;
@@ -1717,7 +1830,7 @@
     // Desktop / TV keyboard shortcuts. Cheap to keep and useful on web.
     document.addEventListener('keydown', (event) => {
       if (mobilePlayer.classList.contains('hidden')) return;
-      if (event.target.matches('input, textarea')) return;
+      if (event.target.matches('input, textarea') || !sheetBackdrop.classList.contains('hidden')) return;
 
       switch (event.key) {
         case ' ':
@@ -1750,6 +1863,10 @@
   /* ------------------------------------------------------------------ */
 
   function setupBottomSheet() {
+    playerSpinner.addEventListener('click', (event) => {
+      if (event.target.closest('[data-player-retry]')) openEpisode(activeEpisodeUrl, true);
+      if (event.target.closest('[data-player-servers]')) openServersSheet();
+    });
     closeSheetBtn.addEventListener('click', () => {
       haptic();
       closeSheet();
@@ -1789,6 +1906,15 @@
         const index = Number(row.dataset.index);
         const stream = episode.directStreams?.[index];
         if (stream) switchStreamQuality(stream.url, stream.quality);
+        closeSheet();
+      } else if (kind === 'quality-auto') {
+        state.qualityMode = 'auto';
+        try { localStorage.setItem('krmzi_quality_mode', 'auto'); } catch (_) {}
+        const streams = episode.directStreams || [];
+        if (hlsPlayer) {
+          hlsPlayer.nextLevel = -1;
+          activeQualityLabel.textContent = 'تلقائي';
+        } else playDirectStream(streams, initialStreamIndex(streams), { resumeAt: nativePlayer.currentTime || 0, paused: nativePlayer.paused });
         closeSheet();
       }
     });
@@ -1852,9 +1978,10 @@
       return;
     }
 
-    const itemsHtml = streams
+    const itemsHtml = `<button class="sheet-row ${state.qualityMode === 'auto' ? 'active' : ''}" data-sheet="quality-auto"><span>تلقائي · بدء سريع</span>${state.qualityMode === 'auto' ? '<i class="fa-solid fa-check"></i>' : ''}</button>` + streams
       .map((stream, index) => {
-        const isActive = state.activeQuality?.quality === stream.quality;
+        if (stream.type === 'hls') return '';
+        const isActive = state.qualityMode === 'manual' && state.activeQuality?.quality === stream.quality;
         return `
           <div class="sheet-row ${isActive ? 'active' : ''}" data-sheet="quality" data-index="${index}" role="button" tabindex="0">
             <span>${escapeHtml(stream.quality)}</span>
@@ -1879,6 +2006,7 @@
       );
       if (token !== state.sheetToken) return;
 
+      seriesContext = series;
       const episodes = Array.isArray(series.episodes) ? series.episodes.slice(0, 300) : [];
       const itemsHtml = `
         <div class="sheet-series-head">

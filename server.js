@@ -112,7 +112,7 @@ const inFlight = new Map();
  * Read-through cache with stale-while-revalidate.
  * Concurrent callers for the same key share a single upstream request.
  */
-async function cached(key, { ttl, stale = ttl * 4 }, producer) {
+async function cached(key, { ttl, stale = ttl * 4, staleIfError = true }, producer) {
   const entry = cache.peek(key);
   const now = Date.now();
 
@@ -122,15 +122,15 @@ async function cached(key, { ttl, stale = ttl * 4 }, producer) {
 
   if (entry && entry.staleUntil > now) {
     // Serve instantly, refresh in the background.
-    refresh(key, ttl, stale, producer).catch(() => {});
+    refresh(key, ttl, stale, producer, staleIfError).catch(() => {});
     return { data: entry.data, state: 'STALE' };
   }
 
-  const data = await refresh(key, ttl, stale, producer);
+  const data = await refresh(key, ttl, stale, producer, staleIfError);
   return { data, state: 'MISS' };
 }
 
-function refresh(key, ttl, stale, producer) {
+function refresh(key, ttl, stale, producer, staleIfError = true) {
   const pending = inFlight.get(key);
   if (pending) return pending;
 
@@ -143,7 +143,7 @@ function refresh(key, ttl, stale, producer) {
     .catch((err) => {
       // Stale-if-error: keep the last good payload alive instead of failing.
       const entry = cache.peek(key);
-      if (entry) {
+      if (entry && staleIfError) {
         entry.staleUntil = Date.now() + 60_000;
         return entry.data;
       }
@@ -177,14 +177,14 @@ const HTML_HEADERS = {
   Referer: `${ORIGIN}/`,
 };
 
-async function fetchText(url, { timeout = 12_000, headers = HTML_HEADERS } = {}) {
+async function fetchText(url, { timeout = 12_000, headers = HTML_HEADERS, signal } = {}) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeout);
   try {
     const response = await fetch(url, {
       headers,
       redirect: 'follow',
-      signal: controller.signal,
+      signal: signal ? AbortSignal.any([controller.signal, signal]) : controller.signal,
       // Native fetch (undici) keeps connections alive and transparently
       // decodes gzip/br, unlike the previous http.get implementation.
     });
@@ -430,10 +430,11 @@ const QUALITY_LABELS = {
 };
 
 /** Extract direct MP4/HLS renditions from an OK.ru embed page. */
-async function extractOkStreams(id) {
+async function extractOkStreams(id, signal) {
   try {
     const html = await fetchText(`https://ok.ru/videoembed/${id}`, {
       timeout: 6_500,
+      signal,
       headers: {
         'User-Agent': USER_AGENT,
         Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
@@ -449,18 +450,38 @@ async function extractOkStreams(id) {
     const metadata = options?.flashvars?.metadata;
     const meta = typeof metadata === 'string' ? JSON.parse(metadata) : metadata;
     const videos = Array.isArray(meta?.videos) ? meta.videos : [];
-    if (videos.length === 0) return [];
+    const adaptive = typeof meta?.hlsManifestUrl === 'string' && /^https?:\/\//.test(meta.hlsManifestUrl)
+      ? [{ quality: 'تلقائي', type: 'hls', url: meta.hlsManifestUrl }]
+      : [];
 
     const byName = new Map(videos.map((video) => [video.name, video]));
-    return QUALITY_ORDER.flatMap((quality) => {
+    return adaptive.concat(QUALITY_ORDER.flatMap((quality) => {
       const video = byName.get(quality);
       return video?.url
         ? [{ quality: QUALITY_LABELS[quality] || quality, url: video.url }]
         : [];
-    });
+    }));
   } catch (error) {
-    console.warn(`OK.ru extraction skipped for ${id}: ${error.message}`);
+    if (!signal?.aborted) console.warn(`OK.ru extraction skipped for ${id}: ${error.message}`);
     return [];
+  }
+}
+
+async function resolveFirstOkStreams(servers) {
+  if (!servers.length) return { id: null, streams: [] };
+  const controller = new AbortController();
+  try {
+    // A ready provider should never wait for a slower mirror. Cancel losing
+    // requests as soon as one provider returns usable video renditions.
+    return await Promise.any(servers.map(async ({ id }) => {
+      const streams = await extractOkStreams(id, controller.signal);
+      if (!streams.length) throw new Error('No playable streams');
+      return { id, streams };
+    }));
+  } catch (_) {
+    return { id: null, streams: [] };
+  } finally {
+    controller.abort();
   }
 }
 
@@ -549,10 +570,9 @@ async function getEpisodeDetailData(epUrl) {
     }
   };
 
-  // Resolve every OK.ru server in parallel instead of serially.
+  // Return the first usable OK.ru source; do not wait for every mirror.
   const okServers = normalizedServers.filter((s) => s.name.toLowerCase() === 'ok');
-  const okResults = await Promise.all(okServers.map((s) => extractOkStreams(s.id)));
-  const okStreams = okResults.flat();
+  const { id: directServerId, streams: okStreams } = await resolveFirstOkStreams(okServers);
 
   const seenStreamUrls = new Set();
   const directStreams = okStreams.filter((stream) => {
@@ -569,7 +589,7 @@ async function getEpisodeDetailData(epUrl) {
         name,
         id,
         embedUrl,
-        hasDirectStream: name.toLowerCase() === 'ok' && directStreams.length > 0,
+        hasDirectStream: name.toLowerCase() === 'ok' && id === directServerId,
       };
     })
     .filter(Boolean);
@@ -596,6 +616,63 @@ function pageParam(req) {
   const page = parseInt(req.query.page, 10);
   return Number.isFinite(page) && page > 0 && page < 500 ? page : 1;
 }
+
+function safeMediaUrl(raw) {
+  try {
+    const url = new URL(raw);
+    if (url.protocol !== 'https:' || url.username || url.password || (url.port && url.port !== '443')) return null;
+    return ['okcdn.ru', 'vkuser.net'].some((host) => url.hostname === host || url.hostname.endsWith('.' + host)) ? url : null;
+  } catch { return null; }
+}
+
+function rewritePlaylist(text, base) {
+  const proxy = (uri) => {
+    const target = safeMediaUrl(new URL(uri, base).href);
+    if (!target) throw new Error('Unsupported media host');
+    return '/api/media?url=' + encodeURIComponent(target.href);
+  };
+  return text.split(/\r?\n/).map((line) => {
+    if (!line.trim()) return line;
+    if (line.startsWith('#')) return line.replace(/URI="([^"]+)"/g, (_, uri) => `URI="${proxy(uri)}"`);
+    return proxy(line.trim());
+  }).join('\n');
+}
+
+app.get('/api/media', async (req, res) => {
+  let target = safeMediaUrl(req.query.url);
+  if (!target) return res.status(400).end('Invalid media URL');
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 20000);
+  res.on('close', () => controller.abort());
+  try {
+    let response;
+    for (let redirects = 0; redirects <= 5; redirects++) {
+      response = await fetch(target, { redirect: 'manual', signal: controller.signal,
+        headers: { 'User-Agent': USER_AGENT, Origin: 'https://ok.ru', Referer: 'https://ok.ru/',
+          ...(req.headers.range ? { Range: req.headers.range } : {}) } });
+      if (response.status < 300 || response.status >= 400) break;
+      const next = safeMediaUrl(new URL(response.headers.get('location'), target).href);
+      await response.body?.cancel();
+      if (!next || redirects === 5) throw new Error('Invalid redirect');
+      target = next;
+    }
+    if (!response.ok) { await response.body?.cancel(); return res.status(502).end('Media unavailable'); }
+    res.setHeader('Cache-Control', 'no-store');
+    const type = response.headers.get('content-type') || '';
+    if (/mpegurl/i.test(type) || target.pathname.endsWith('.m3u8')) {
+      const text = await response.text();
+      res.type('application/vnd.apple.mpegurl').send(rewritePlaylist(text, target));
+    } else {
+      res.status(response.status);
+      res.setHeader('Content-Type', type || 'video/mp2t');
+      for (const name of ['content-range', 'accept-ranges']) if (response.headers.has(name)) res.setHeader(name, response.headers.get(name));
+      const { Readable } = require('node:stream');
+      const { pipeline } = require('node:stream/promises');
+      await pipeline(Readable.fromWeb(response.body), res);
+    }
+  } catch (_) { if (!res.headersSent) res.status(502).end('Media unavailable'); else res.destroy(); }
+  finally { clearTimeout(timer); }
+});
 
 app.get('/api/home', async (req, res) => {
   const page = pageParam(req);
@@ -677,12 +754,17 @@ app.get('/api/episode/detail', async (req, res) => {
   if (!epUrl) return res.status(400).json({ error: 'Missing or invalid episode url' });
 
   try {
+    const key = `episode_detail_${epUrl}`;
+    if (req.query.fresh === '1') cache.delete(key);
     const result = await cached(
-      `episode_detail_${epUrl}`,
-      { ttl: 300_000, stale: 1_800_000 },
+      key,
+      { ttl: 45_000, stale: 0, staleIfError: false },
       () => getEpisodeDetailData(epUrl)
     );
-    sendCached(res, result, 300, 1800);
+    // Signed video links must never be replayed by browser/proxy caches.
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('X-Cache', result.state);
+    res.json(result.data);
   } catch (error) {
     console.error('Error fetching episode detail:', error.message);
     res.status(502).json({ error: 'Failed to fetch episode detail', details: error.message });
