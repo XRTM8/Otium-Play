@@ -1,11 +1,11 @@
 {
-  "name": "krmzi-app",
-  "version": "1.0.0",
-  "description": "",
+  "name": "otium-play",
+  "version": "1.2.0",
+  "description": "Otium Play \u2014 multi-source movies and series",
   "main": "index.js",
   "scripts": {
     "start": "node server.js",
-    "test": "node --test tests/stream-resolution.test.js tests/media-proxy.test.js",
+    "test": "node --test tests/stream-resolution.test.js tests/media-proxy.test.js tests/cinemana.test.js",
     "test:ui": "node tests/frontend-player.test.cjs"
   },
   "keywords": [],

@@ -3,6 +3,15 @@ plugins {
     id 'org.jetbrains.kotlin.android'
 }
 
+def signingProperties = new Properties()
+def signingPropertiesFile = rootProject.file('signing.properties')
+if (signingPropertiesFile.exists()) signingPropertiesFile.withInputStream { signingProperties.load(it) }
+def signingValue = { name, environment -> System.getenv(environment) ?: signingProperties.getProperty(name) }
+def releaseStore = signingValue('storeFile', 'KRMZI_KEYSTORE_PATH')
+if (gradle.startParameter.taskNames.any { it.toLowerCase().contains('release') } && !releaseStore) {
+    throw new GradleException('Release signing key is required. Configure signing.properties or KRMZI signing environment variables.')
+}
+
 android {
     namespace 'com.krmzi.app'
     compileSdk 34
@@ -11,17 +20,28 @@ android {
         applicationId "com.krmzi.app"
         minSdk 24
         targetSdk 34
-        versionCode 9
-        versionName "1.1.1"
+        versionCode 11
+        versionName "1.2.0"
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    signingConfigs {
+        stableRelease {
+            if (releaseStore) {
+                storeFile rootProject.file(releaseStore)
+                storePassword signingValue('storePassword', 'KRMZI_STORE_PASSWORD')
+                keyAlias signingValue('keyAlias', 'KRMZI_KEY_ALIAS')
+                keyPassword signingValue('keyPassword', 'KRMZI_KEY_PASSWORD')
+            }
+        }
     }
 
     buildTypes {
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
-            signingConfig signingConfigs.debug
+            signingConfig signingConfigs.stableRelease
         }
         debug {
             signingConfig signingConfigs.debug

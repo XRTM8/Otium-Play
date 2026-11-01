@@ -875,6 +875,33 @@ object KrmziScraper {
         } catch (_: Exception) { response?.close(); return error() }
     }
 
+    fun cinemanaSubtitle(raw: String): android.webkit.WebResourceResponse {
+        val error = { android.webkit.WebResourceResponse("text/plain", "UTF-8", 503, "Unavailable", mutableMapOf("Cache-Control" to "no-store"), "".byteInputStream()) }
+        return try {
+            val uri=java.net.URI(raw)
+            if (uri.scheme != "https" || uri.userInfo != null || (uri.port != -1 && uri.port != 443) ||
+                !Regex("cnth[0-9]*[.]shabakaty[.]com").matches(uri.host ?: "") ||
+                !Regex("/vascin-translation-files/[A-Za-z0-9_-]+[.]vtt").matches(uri.path ?: "")) return error()
+            val request=Request.Builder().url(raw).build()
+            client.newBuilder().followRedirects(false).callTimeout(8,TimeUnit.SECONDS).build().newCall(request).execute().use {
+                if (!it.isSuccessful) error() else android.webkit.WebResourceResponse("text/vtt", "UTF-8", 200, "OK", mutableMapOf("Cache-Control" to "no-store"), (it.body?.string() ?: "").byteInputStream())
+            }
+        } catch (_: Exception) { error() }
+    }
+
+    fun cinemana(path: String): String {
+        val allowed = Regex("^(latestSeries|latestMovies)/level/0/itemsPerPage/24/page/0/$").matches(path) ||
+            Regex("^(allVideoInfo|videoSeason|transcoddedFiles)/id/[0-9]+$").matches(path) ||
+            Regex("^video/V/2/itemsPerPage/20/video_title_search/[^/?#]+/itemsPerPage/12/pageNumber/0/level/0$").matches(path)
+        if (!allowed) return errorJson("Invalid provider request")
+        return try {
+            val request = Request.Builder().url("https://cinemana.shabakaty.com/api/android/$path").header("Accept", "application/json").build()
+            client.newBuilder().callTimeout(8, TimeUnit.SECONDS).followRedirects(false).build().newCall(request).execute().use {
+                if (!it.isSuccessful) errorJson("cinemana_unavailable") else it.body?.string() ?: errorJson("cinemana_unavailable")
+            }
+        } catch (_: Exception) { errorJson("cinemana_unavailable") }
+    }
+
     private fun errorJson(message: String): String =
         JSONObject().put("error", message).toString()
 

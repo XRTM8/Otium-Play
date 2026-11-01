@@ -27,6 +27,7 @@ const requests = [];
 const failures = [];
 let delayEpisode = 0;
 let failEpisode = false;
+let failCinemana = false;
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
   requests.push(url.pathname + url.search);
@@ -35,6 +36,18 @@ const server = http.createServer(async (req, res) => {
     res.setHeader('Content-Type', 'application/json; charset=utf-8');
     let data;
     switch (url.pathname) {
+      case '/api/cinemana': {
+        if (failCinemana) {res.statusCode=503;data={error:'unavailable'};break;}
+        const route=url.searchParams.get('path');
+        const item={nb:'700',ar_title:'مسلسل سينمانا',kind:'2',season:'1',episodeNummer:'1',rootSeries:'0',imgObjUrl:artwork};
+        if(route.startsWith('latestSeries'))data=[item];
+        else if(route.startsWith('latestMovies'))data=[{...item,nb:'800',kind:'1',ar_title:'فيلم سينمانا'}];
+        else if(route.startsWith('videoSeason/'))data=[item,{...item,nb:'701',episodeNummer:'2',rootSeries:'700'},{...item,nb:'702',season:'2',rootSeries:'700'}];
+        else if(route.startsWith('allVideoInfo/'))data={...item,...(route.endsWith('702')?{nb:'702',season:'2',rootSeries:'700'}:{})};
+        else if(route.startsWith('transcoddedFiles/'))data=[{resolution:'720p',container:'mp4',videoUrl:'https://cdn.shabakaty.com/test-720.mp4'}];
+        else data=[];
+        break;
+      }
       case '/api/home': data = { episodes: { episodes }, series: { series: [series] } }; break;
       case '/api/episodes': data = { episodes }; break;
       case '/api/series': data = { series: [series] }; break;
@@ -280,6 +293,37 @@ async function run() {
     assert.equal(await adaptivePage.evaluate(() => window.__engine.destroyed), true, 'Closing destroys HLS downloads');
     await adaptiveContext.close();
     console.log('PASS adaptive lifecycle: same-origin source,720p startup,seamless quality,Auto,cleanup');
+    const sourceContext = await browser.newContext({ viewport:{width:390,height:844},serviceWorkers:'block' });
+    await sourceContext.addInitScript(mediaMock);
+    const sourcePage=await sourceContext.newPage();
+    await sourcePage.goto(origin);
+    await sourcePage.locator('#seriesGrid [data-action="series"]').first().waitFor();
+    assert.equal(await sourcePage.title(),'Otium Play');
+    await sourcePage.locator('[data-source="cinemana"]').click();
+    await sourcePage.locator('#seriesGrid [data-url="cinemana:700"]').waitFor();
+    await sourcePage.locator('#seriesGrid [data-url="cinemana:700"]').click();
+    await sourcePage.locator('.sheet-episode-btn').first().waitFor();
+    assert.equal(await sourcePage.locator('.sheet-episode-btn').count(),2);
+    await sourcePage.locator('[data-sheet-season="2"]').click();
+    assert.equal(await sourcePage.locator('.sheet-episode-btn').count(),1);
+    await sourcePage.locator('#sheetEpisodeSearch').fill('999');
+    assert.equal(await sourcePage.locator('.sheet-episode-btn').count(),0);
+    await sourcePage.locator('#sheetEpisodeSearch').fill('');
+    await sourcePage.locator('.sheet-episode-btn').first().click();
+    await sourcePage.waitForFunction(()=>document.getElementById('nativePlayer').src.includes('test-720.mp4'));
+    await sourcePage.locator('#drawerEpisodesCarousel .episode-card').first().waitFor();
+    assert.equal(await sourcePage.locator('#drawerEpisodesCarousel .episode-card').count(),1);
+    assert(await sourcePage.locator('#drawerEpisodesCarousel .episode-card.active').count());
+    await sourcePage.locator('#dismissPlayerBtn').click();
+    await sourcePage.locator('[data-source="krmzi"]').click();
+    await sourcePage.locator('#seriesGrid [data-action="series"]').first().waitFor();
+    failCinemana=true;
+    await sourcePage.locator('[data-source="cinemana"]').click();
+    await sourcePage.waitForFunction(()=>document.getElementById('sourceStatus').textContent.includes('غير متاح'));
+    assert(await sourcePage.locator('[data-source="krmzi"]').isVisible());
+    failCinemana=false;
+    await sourceContext.close();
+    console.log('PASS Otium: identity,source switch,Cinemana seasons,episode search,player cards,unavailable source');
     assert.deepEqual(failures, [], 'Browser runtime errors');
   } finally { await browser.close(); server.close(); }
 }

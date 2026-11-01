@@ -34,8 +34,8 @@ class MainActivity : AppCompatActivity() {
     private companion object {
         const val TAG = "KrmziMainActivity"
         const val APP_URL = "https://appassets.androidplatform.net/assets/public/index.html"
-        const val FALLBACK_VERSION_NAME = "1.1.1"
-        const val FALLBACK_VERSION_CODE = 9L
+        const val FALLBACK_VERSION_NAME = "1.2.0"
+        const val FALLBACK_VERSION_CODE = 11L
     }
 
     private lateinit var webView: WebView
@@ -412,6 +412,9 @@ class MainActivity : AppCompatActivity() {
                     host == "localhost" ||
                     host == "127.0.0.1"
 
+                if (isLocalApp && path == "/api/cinemana/subtitle") {
+                    return KrmziScraper.cinemanaSubtitle(requestUri.getQueryParameter("url") ?: "")
+                }
                 if (isLocalApp && path == "/api/media") {
                     return KrmziScraper.mediaResponse(requestUri.getQueryParameter("url") ?: "", request.requestHeaders["Range"] ?: request.requestHeaders["range"])
                 }
@@ -421,7 +424,7 @@ class MainActivity : AppCompatActivity() {
                         return corsResponse(204, "No Content", "")
                     }
                     return try {
-                        val json = KrmziScraper.handle(requestUri.toString())
+                        val json = if (path == "/api/cinemana") KrmziScraper.cinemana(requestUri.getQueryParameter("path") ?: "") else KrmziScraper.handle(requestUri.toString())
                         WebResourceResponse(
                             "application/json",
                             "UTF-8",

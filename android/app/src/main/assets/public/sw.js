@@ -1,7 +1,7 @@
 /* Krmzi Pro service worker - app shell + API stale-while-revalidate */
 'use strict';
 
-const VERSION = '1.1.1';
+const VERSION = '1.2.0';
 const SHELL_CACHE = `krmzi-shell-v${VERSION}`;
 const STATIC_CACHE = `krmzi-static-v${VERSION}`;
 const API_CACHE = `krmzi-api-v${VERSION}`;
@@ -10,9 +10,10 @@ const MAX_API_ENTRIES = 80;
 const SHELL_ASSETS = [
   './',
   './index.html',
-  './styles.css?v=1.1.1',
-  './app.js?v=1.1.1',
+  './styles.css?v=1.2.0',
+  './app.js?v=1.2.0',
   './manifest.json',
+  './providers/cinemana.js',
   './vendor/hls/hls.min.js',
   './icons/icon-192.png',
   './icons/icon-512.png',

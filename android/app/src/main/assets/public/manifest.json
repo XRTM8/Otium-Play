@@ -1,7 +1,7 @@
 {
-  "name": "قرمزي برو - Krmzi Pro",
-  "short_name": "Krmzi Pro",
-  "description": "تطبيق مشاهدة المسلسلات التركية بدون إعلانات وبجودة فائقة",
+  "name": "Otium Play",
+  "short_name": "Otium Play",
+  "description": "كل حكاية، بمكان واحد — أفلام ومسلسلات من مصادر متعددة",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#070709",

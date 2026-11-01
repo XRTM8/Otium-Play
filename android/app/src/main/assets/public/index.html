@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-  <title>قرمزي</title>
+  <title>Otium Play</title>
   
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -21,7 +21,7 @@
   <link rel="stylesheet" href="fonts/tajawal.css">
   <link rel="stylesheet" href="vendor/fontawesome/css/all.min.css">
 
-  <link rel="stylesheet" href="styles.css?v=1.1.1">
+  <link rel="stylesheet" href="styles.css?v=1.2.0">
 </head>
 <body>
 
@@ -31,8 +31,7 @@
     <!-- Minimal Header -->
     <header class="top-nav">
       <div class="nav-brand" id="brandBtn">
-        <span class="brand-text">قرمزي</span>
-        <span class="brand-sub">بث فائق</span>
+        <span class="brand-mark" aria-hidden="true">▶</span><span class="brand-text" dir="ltr">Otium <b>Play</b></span>
       </div>
       <button class="nav-icon-btn" id="openSearchBtn" aria-label="بحث">
         <i class="fa-solid fa-magnifying-glass"></i>
@@ -57,6 +56,15 @@
           <span>إعادة المحاولة</span>
         </button>
       </div>
+
+      <section class="source-switcher" aria-label="مصدر المشاهدة">
+        <div class="source-label"><span>مصادر المشاهدة</span><small id="sourceStatus" role="status">اختر مكتبتك</small></div>
+        <div class="source-options">
+          <button class="source-option active" data-source="krmzi" aria-pressed="true">قرمزي <span>مسلسلات تركية</span></button>
+          <button class="source-option" data-source="cinemana" aria-pressed="false">سينمانا <span>أفلام ومسلسلات</span></button>
+        </div>
+        <p class="source-network-note hidden" id="sourceNetworkNote">توفر سينمانا يعتمد على شبكتك. إذا تعذر الاتصال، اختر قرمزي.</p>
+      </section>
 
       <!-- Hero Cinematic Spotlight -->
       <section class="spotlight-wrap" id="heroSpotlight">
@@ -141,7 +149,7 @@
             </div>
             <div class="version-text">
               <span class="v-label">إصدار التطبيق</span>
-              <span class="v-val" id="installedVersionText">v1.1.1</span>
+              <span class="v-val" id="installedVersionText">v1.2.0</span>
             </div>
           </div>
           <button class="check-update-btn" id="manualCheckUpdateBtn">
@@ -291,6 +299,7 @@
                 <i class="fa-solid fa-gear"></i>
                 <span id="activeQualityLabel">1080p</span>
               </button>
+              <button class="action-circle-icon hidden" id="toggleSubtitlesBtn" aria-label="الترجمة" title="الترجمة">CC</button>
               <button class="action-circle-icon" id="togglePipBtn"><i class="fa-solid fa-clone"></i></button>
               <button class="action-circle-icon" id="toggleFullscreenBtn"><i class="fa-solid fa-expand"></i></button>
             </div>
@@ -316,7 +325,8 @@
           <span class="drawer-heading">جميع الحلقات</span>
           <span class="drawer-badge" id="drawerCount">0 حلقة</span>
         </div>
-        <div class="drawer-ep-row" id="drawerEpisodesCarousel"></div>
+        <div class="episode-toolbar" id="drawerEpisodeTools"><div class="season-tabs" id="drawerSeasonTabs"></div><label class="episode-search"><i class="fa-solid fa-magnifying-glass"></i><input id="drawerEpisodeSearch" type="search" placeholder="ابحث عن حلقة" aria-label="ابحث عن حلقة"></label></div>
+        <div class="drawer-ep-row episode-card-list" id="drawerEpisodesCarousel"></div>
       </div>
     </div>
 
@@ -359,6 +369,7 @@
   </div>
 
   <script src="vendor/hls/hls.min.js" defer></script>
-  <script src="app.js?v=1.1.1" defer></script>
+  <script src="providers/cinemana.js" defer></script>
+  <script src="app.js?v=1.2.0" defer></script>
 </body>
 </html>

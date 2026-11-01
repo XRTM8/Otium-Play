@@ -674,6 +674,32 @@ app.get('/api/media', async (req, res) => {
   finally { clearTimeout(timer); }
 });
 
+// Forward only the read-only public catalogue methods used by Cinemana's web app.
+function validCinemanaPath(value) {
+  return typeof value === 'string' && (/^(latestSeries|latestMovies)\/level\/0\/itemsPerPage\/24\/page\/0\/$/.test(value)
+    || /^(allVideoInfo|videoSeason|transcoddedFiles)\/id\/\d+$/.test(value)
+    || /^video\/V\/2\/itemsPerPage\/20\/video_title_search\/[^/?#]+\/itemsPerPage\/12\/pageNumber\/0\/level\/0$/.test(value));
+}
+function safeCinemanaSubtitle(raw) {
+  try { const u=new URL(raw); return u.protocol==='https:' && /^cnth[0-9]*\.shabakaty\.com$/.test(u.hostname) && !u.username && !u.password && (!u.port || u.port==='443') && /^\/vascin-translation-files\/[A-Za-z0-9_-]+\.vtt$/.test(u.pathname) ? u.href : null; } catch { return null; }
+}
+app.get('/api/cinemana/subtitle', async(req,res)=>{
+  const url=safeCinemanaSubtitle(req.query.url); if(!url)return res.status(400).end();
+  try { const r=await fetch(url,{signal:AbortSignal.timeout(8000),redirect:'error'});if(!r.ok)throw Error();res.setHeader('Cache-Control','no-store');res.type('text/vtt').send(await r.text()); }
+  catch { res.status(503).end(); }
+});
+app.get('/api/cinemana', async (req,res) => {
+  const route = req.query.path;
+  if (!validCinemanaPath(route)) return res.status(400).json({error:'Invalid provider request'});
+  res.setHeader('Cache-Control','no-store');
+  try {
+    const response = await fetch('https://cinemana.shabakaty.com/api/android/'+route,
+      {signal:AbortSignal.timeout(8000),headers:{Accept:'application/json'},redirect:'error'});
+    if (!response.ok) throw new Error('Provider unavailable');
+    res.json(await response.json());
+  } catch (_) { res.status(503).json({error:'cinemana_unavailable'}); }
+});
+
 app.get('/api/home', async (req, res) => {
   const page = pageParam(req);
   const key = `home_${page}`;
@@ -810,7 +836,7 @@ app.use((req, res) => {
 
 const server = app.listen(PORT, () => {
   console.log('=======================================================');
-  console.log('  KRMZI PRO SERVER IS RUNNING');
+  console.log('  OTIUM PLAY SERVER IS RUNNING');
   console.log(`  Open in browser: http://localhost:${PORT}`);
   console.log('  Cache: SWR + request coalescing enabled');
   console.log('=======================================================');

@@ -1,9 +1,6 @@
-name: Build & Release Android APK
+name: Build & Release Otium Play APK
 
 on:
-  push:
-    tags:
-      - 'v*'
   workflow_dispatch:
     inputs:
       version:
@@ -43,32 +40,42 @@ jobs:
           mkdir -p android/app/src/main/assets/public
           cp -r public/* android/app/src/main/assets/public/
 
-      - name: Build Android APK with Gradle
+      - name: Restore stable signing key
         env:
-          ANDROID_HOME: /usr/local/lib/android/sdk
+          KEYSTORE_BASE64: ${{ secrets.KRMZI_KEYSTORE_BASE64 }}
         run: |
-          cd android
-          gradle assembleRelease --no-daemon --stacktrace || gradle assembleDebug --no-daemon --stacktrace
+          test -n "$KEYSTORE_BASE64" || { echo "Missing stable signing key"; exit 1; }
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/krmzi-release.keystore"
+          chmod 600 "$RUNNER_TEMP/krmzi-release.keystore"
 
-      - name: Locate and Stage APK
+      - name: Build signed release
+        env:
+          KRMZI_KEYSTORE_PATH: ${{ runner.temp }}/krmzi-release.keystore
+          KRMZI_STORE_PASSWORD: ${{ secrets.KRMZI_STORE_PASSWORD }}
+          KRMZI_KEY_ALIAS: ${{ secrets.KRMZI_KEY_ALIAS }}
+          KRMZI_KEY_PASSWORD: ${{ secrets.KRMZI_KEY_PASSWORD }}
+        run: gradle -p android assembleRelease --no-daemon --stacktrace
+
+      - name: Verify signature and stage exact release APK
         run: |
+          set -euo pipefail
+          EXPECTED_FINGERPRINT=$(tr -d '\r\n' < .github/signing-certificate.sha256)
+          test -n "$EXPECTED_FINGERPRINT"
+          APK_FILE=android/app/build/outputs/apk/release/app-release.apk
+          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -name apksigner | sort -V | tail -n 1)
+          "$APKSIGNER" verify --print-certs "$APK_FILE" > "$RUNNER_TEMP/krmzi-cert.txt"
+          ACTUAL=$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' "$RUNNER_TEMP/krmzi-cert.txt")
+          test "$ACTUAL" = "$EXPECTED_FINGERPRINT" || { echo "Signing key mismatch"; exit 1; }
           mkdir -p release-output
-          APK_FILE=$(find android/app/build/outputs/apk -name "*.apk" | head -n 1)
-          if [ -z "$APK_FILE" ]; then
-            echo "Error: No APK file found!"
-            exit 1
-          fi
-          echo "Found APK at: $APK_FILE"
           cp "$APK_FILE" release-output/krmzi-pro.apk
-          ls -lh release-output/
 
       - name: Create GitHub Release & Upload APK
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.event.inputs.version || github.ref_name }}
-          name: Krmzi Mobile Pro - ${{ github.event.inputs.version || github.ref_name }}
+          name: Otium Play - ${{ github.event.inputs.version || github.ref_name }}
           body: |
-            # 📱 تطبيق قرمزي برو | Krmzi Mobile Pro (APK)
+            # 📱 Otium Play (APK)
             
             الإصدار الرسمي لتطبيق مشاهدة وبث المسلسلات التركية بدون أي إعلانات نهائياً وبجودة تصل إلى 1080p Full HD.
             

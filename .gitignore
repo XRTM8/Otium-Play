@@ -2,3 +2,9 @@ node_modules/
 .DS_Store
 *.log
 .env
+
+.signing/
+android/signing.properties
+android/.gradle/
+android/build/
+android/app/build/
