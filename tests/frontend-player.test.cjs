@@ -132,7 +132,7 @@ async function run() {
       page.on('pageerror', (error) => failures.push(error.message));
       await page.goto(origin);
       await page.locator('#episodesCarousel [data-action="episode"]').first().waitFor();
-      if (viewport.width === 390) await page.screenshot({ path: path.join(os.tmpdir(), 'krmzi-1.1.1-home-390.png') });
+      if (viewport.width === 390) await page.screenshot({ path: path.join(os.tmpdir(), 'otium-1.3.0-home-390.png') });
       const bounds = await page.evaluate(() => ({ width: innerWidth, scroll: document.documentElement.scrollWidth, frame: document.getElementById('appFrame').getBoundingClientRect().width }));
       assert(bounds.scroll <= bounds.width + 1, `Page overflow at ${viewport.width}`);
       assert(bounds.frame > 250 && bounds.frame <= bounds.width + 1, `Collapsed app frame at ${viewport.width}`);
@@ -157,7 +157,7 @@ async function run() {
       await page.evaluate(() => window.__ready());
       await page.locator('#openServersSheetBtn').click();
       await page.waitForTimeout(400);
-      if ([390, 844].includes(viewport.width)) await page.screenshot({ path: path.join(os.tmpdir(), `krmzi-1.1.1-servers-${viewport.width}.png`) });
+      if ([390, 844].includes(viewport.width)) await page.screenshot({ path: path.join(os.tmpdir(), `otium-1.3.0-servers-${viewport.width}.png`) });
       const panel = await page.locator('#bottomSheet').boundingBox();
       assert(panel.y >= -1 && panel.y + panel.height <= viewport.height + 1, `Sheet outside viewport at ${viewport.width}`);
       const serverRows = await page.locator('#sheetBody .sheet-row').evaluateAll((rows) => rows.map((row) => ({ height: row.getBoundingClientRect().height, scroll: row.scrollWidth, width: row.clientWidth })));
@@ -234,7 +234,7 @@ async function run() {
     await page.locator('#spotlightPlayBtn').click();
     await page.locator('[data-player-retry]').waitFor();
     await page.waitForTimeout(400);
-    await page.screenshot({ path: path.join(os.tmpdir(), 'krmzi-1.1.1-error-320.png') });
+    await page.screenshot({ path: path.join(os.tmpdir(), 'otium-1.3.0-error-320.png') });
     const errorControls = await page.locator('[data-player-retry], [data-player-servers]').evaluateAll((buttons) => buttons.map((button) => {
       const rect = button.getBoundingClientRect();
       const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
@@ -301,9 +301,21 @@ async function run() {
     assert.equal(await sourcePage.title(),'Otium Play');
     await sourcePage.locator('[data-source="cinemana"]').click();
     await sourcePage.locator('#seriesGrid [data-url="cinemana:700"]').waitFor();
+    await sourcePage.reload();
+    await sourcePage.locator('#seriesGrid [data-url="cinemana:700"]').waitFor();
+    assert.equal(await sourcePage.locator('[data-source="cinemana"]').getAttribute('aria-pressed'),'true','Source choice persists');
     await sourcePage.locator('#seriesGrid [data-url="cinemana:700"]').click();
     await sourcePage.locator('.sheet-episode-btn').first().waitFor();
     assert.equal(await sourcePage.locator('.sheet-episode-btn').count(),2);
+    assert.equal(await sourcePage.evaluate(()=>document.activeElement.id),'closeSheetBtn');
+    await sourcePage.locator('.sheet-episode-btn').last().focus();
+    await sourcePage.keyboard.press('Tab');
+    assert.equal(await sourcePage.evaluate(()=>document.activeElement.id),'closeSheetBtn','Modal traps keyboard focus');
+    await sourcePage.keyboard.press('Escape');
+    assert.equal(await sourcePage.evaluate(()=>document.activeElement.dataset.url),'cinemana:700','Closing restores origin focus');
+    await sourcePage.locator('#seriesGrid [data-url="cinemana:700"]').click();
+    await sourcePage.locator('.sheet-episode-btn').first().waitFor();
+
     await sourcePage.locator('[data-sheet-season="2"]').click();
     assert.equal(await sourcePage.locator('.sheet-episode-btn').count(),1);
     await sourcePage.locator('#sheetEpisodeSearch').fill('999');
@@ -324,6 +336,50 @@ async function run() {
     failCinemana=false;
     await sourceContext.close();
     console.log('PASS Otium: identity,source switch,Cinemana seasons,episode search,player cards,unavailable source');
+    for (const tvViewport of [{width:1280,height:720},{width:1920,height:1080}]) {
+      const tvContext=await browser.newContext({viewport:tvViewport,serviceWorkers:'block',userAgent:'Mozilla/5.0 (Linux; Android TV) Chrome/120.0.0.0 Safari/537.36'});
+      await tvContext.addInitScript(mediaMock);
+      const tvPage=await tvContext.newPage();
+      tvPage.on('pageerror',error=>failures.push(error.message));
+      await tvPage.goto(origin);
+      await tvPage.locator('#seriesGrid [data-action="series"]').first().waitFor();
+      assert.equal(await tvPage.locator('html').getAttribute('data-display'),'tv');
+      assert.equal(await tvPage.evaluate(()=>document.activeElement.id),'spotlightPlayBtn');
+      const dock=await tvPage.locator('.bottom-dock').boundingBox();
+      assert(dock.y<100&&dock.width>500,'TV uses horizontal top navigation');
+      assert(parseFloat(await tvPage.locator('.dock-btn span').first().evaluate(el=>getComputedStyle(el).fontSize))>=18);
+      await tvPage.keyboard.press('ArrowLeft');
+      assert.equal(await tvPage.evaluate(()=>document.activeElement.id),'spotlightSeriesBtn','Remote left reaches details');
+      await tvPage.keyboard.press('Enter');
+      await tvPage.locator('.sheet-episode-btn').first().waitFor();
+      const columns=await tvPage.evaluate(()=>{
+        const art=document.querySelector('.series-detail-hero').getBoundingClientRect();
+        const list=document.getElementById('seriesEpisodeList').getBoundingClientRect();
+        const first=document.querySelector('.sheet-episode-btn').getBoundingClientRect();
+        return {separate:list.right<=art.left+2,visible:first.bottom<=list.bottom+1&&first.top>=list.top-1};
+      });
+      assert(columns.separate&&columns.visible,'TV keeps first episodes visible beside series artwork');
+      await tvPage.keyboard.press('Escape');
+
+      await tvPage.keyboard.press('ArrowDown');
+      assert(await tvPage.evaluate(()=>document.activeElement.matches('[data-action="episode"]')),'Remote down reaches content');
+      await tvPage.keyboard.press('Enter');
+      await tvPage.waitForFunction(()=>document.getElementById('nativePlayer').src.endsWith('/hd.mp4'));
+      await tvPage.evaluate(()=>window.__ready());
+      await tvPage.locator('#openEpisodesSheetBtn').focus();
+      await tvPage.keyboard.press('Enter');
+      await tvPage.locator('.episode-select-list .sheet-episode-btn').first().waitFor();
+      await tvPage.keyboard.press('ArrowDown');
+      assert(await tvPage.evaluate(()=>document.activeElement.matches('[data-sheet="episode"]')));
+      await tvPage.keyboard.press('Enter');
+      await tvPage.waitForFunction(()=>document.getElementById('sheetBackdrop').classList.contains('hidden'));
+      await tvPage.evaluate(()=>document.activeElement.dispatchEvent(new KeyboardEvent('keydown',{key:'BrowserBack',bubbles:true})));
+      assert(await tvPage.locator('#mobilePlayer').evaluate(el=>el.classList.contains('hidden')));
+      assert.equal(await tvPage.evaluate(()=>document.activeElement.id),'spotlightPlayBtn');
+      await tvPage.screenshot({path:path.join(os.tmpdir(),`otium-1.3.0-tv-${tvViewport.width}.png`)});
+      await tvContext.close();
+      console.log(`PASS TV${tvViewport.width}: detection,large type,top navigation,D-pad,episode menu,remote Back`);
+    }
     assert.deepEqual(failures, [], 'Browser runtime errors');
   } finally { await browser.close(); server.close(); }
 }

@@ -34,8 +34,8 @@ class MainActivity : AppCompatActivity() {
     private companion object {
         const val TAG = "KrmziMainActivity"
         const val APP_URL = "https://appassets.androidplatform.net/assets/public/index.html"
-        const val FALLBACK_VERSION_NAME = "1.2.0"
-        const val FALLBACK_VERSION_CODE = 11L
+        const val FALLBACK_VERSION_NAME = "1.3.0"
+        const val FALLBACK_VERSION_CODE = 12L
     }
 
     private lateinit var webView: WebView
@@ -51,6 +51,9 @@ class MainActivity : AppCompatActivity() {
     /* ------------------------------------------------------------------ */
 
     inner class KrmziBridge {
+        @JavascriptInterface
+        fun isTelevision(): Boolean = (resources.configuration.uiMode and Configuration.UI_MODE_TYPE_MASK) == Configuration.UI_MODE_TYPE_TELEVISION
+
         @JavascriptInterface
         fun getHome(page: Int): String = KrmziScraper.getHome(page)
 
@@ -246,6 +249,9 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         KrmziScraper.init(applicationContext)
 
+        if ((resources.configuration.uiMode and Configuration.UI_MODE_TYPE_MASK) == Configuration.UI_MODE_TYPE_TELEVISION) {
+            requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+        }
         configureWindow()
 
         container = FrameLayout(this).apply {
@@ -253,7 +259,7 @@ class MainActivity : AppCompatActivity() {
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT
             )
-            setBackgroundColor(Color.parseColor("#060709"))
+            setBackgroundColor(Color.parseColor("#111110"))
         }
 
         assetLoader = WebViewAssetLoader.Builder()

@@ -4,8 +4,8 @@
   "description": "كل حكاية، بمكان واحد — أفلام ومسلسلات من مصادر متعددة",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#070709",
-  "theme_color": "#070709",
+  "background_color": "#111110",
+  "theme_color": "#111110",
   "dir": "rtl",
   "lang": "ar",
   "icons": [

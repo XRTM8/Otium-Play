@@ -12,7 +12,7 @@
  */
 
 (() => {
-  const APP_VERSION = '1.2.0';
+  const APP_VERSION = '1.3.0';
   const FAVS_KEY = 'krmzi_favs';
   const HIST_KEY = 'krmzi_hist';
   const PREF_QUALITY_KEY = 'krmzi_pref_quality';
@@ -51,7 +51,7 @@
   }
 
   const state = {
-    source: 'krmzi',
+    source: readString('otium_source', 'krmzi') === 'cinemana' ? 'cinemana' : 'krmzi',
     activeTab: 'home',
     previousTab: 'home',
     librarySubtab: 'favs',
@@ -430,18 +430,22 @@
       state.filteredSeries = filterSeries(series, state.activeFilter);
 
       if (seriesCountSub) seriesCountSub.textContent = `${series.length} مسلسل`;
+      document.querySelector('[data-filter="year"]').disabled = !series.some(item => Number(item.year)>0);
 
-      $('sourceStatus').textContent = state.source === 'cinemana' ? 'سينمانا · متصل' : 'قرمزي · متصل';
+      $('sourceStatus').textContent = '';
+      $('sourceNetworkNote').classList.add('hidden');
       document.querySelector('#episodesSection h3').textContent = state.source === 'cinemana' ? 'أحدث الأفلام' : 'أحدث الحلقات';
       renderEpisodesCarousel(episodes);
       renderSeriesGrid(state.filteredSeries);
       renderSpotlight(episodes[0]);
       renderHistory();
+      window.OtiumDisplay?.focusHome();
 
       if (episodes.length === 0 && series.length === 0) checkAndShowOffline();
       else hideOfflineState();
     } catch (error) {
-      $('sourceStatus').textContent = state.source === 'cinemana' ? 'سينمانا غير متاح على شبكتك · اختر قرمزي' : 'تعذر الاتصال';
+      $('sourceStatus').textContent = state.source === 'cinemana' ? 'غير متاح حالياً' : 'تعذر الاتصال';
+      $('sourceNetworkNote').classList.toggle('hidden', state.source !== 'cinemana');
       console.error('Error during loadData:', error);
       // Keep whatever was already rendered; only show the error card when
       // there is genuinely nothing to display.
@@ -475,8 +479,9 @@
   }
 
   function filterSeries(series, filter) {
-    if (!filter || filter === 'all') return series;
-    return series.filter((item) => String(item.title || '').includes(filter));
+    if (filter === 'az') return [...series].sort((a,b) => String(a.title).localeCompare(String(b.title),'ar'));
+    if (filter === 'year') return [...series].sort((a,b) => (Number(b.year)||0)-(Number(a.year)||0));
+    return series;
   }
 
   /* ------------------------------------------------------------------ */
@@ -513,7 +518,7 @@
         ${imageTag(series.thumbnail, series.title, 'series-tile-thumb')}
         <div class="series-tile-body">
           <div class="series-tile-title">${escapeHtml(series.title)}</div>
-          <div class="series-tile-sub">${escapeHtml(subtitle)}</div>
+          <div class="series-tile-sub">${escapeHtml([series.year,Number(series.rating)>0 ? `★ ${Number(series.rating).toFixed(1)}` : ''].filter(Boolean).join('  ·  '))}</div>
         </div>
       </div>`;
   }
@@ -552,13 +557,14 @@
       return;
     }
 
-    setHeroImage(ep.thumbnail);
+    setHeroImage(ep.artwork || ep.thumbnail);
     spotlightTitle.textContent = ep.title || '';
     spotlightBadgeText.textContent = ep.episodeNum
       ? `الحلقة ${ep.episodeNum}`
-      : 'الأحدث الآن';
+      : 'جديد في المكتبة';
     spotlightProgressWrap.classList.add('hidden');
-    spotlightPlayBtnText.textContent = 'مشاهدة الحلقة';
+    spotlightPlayBtnText.textContent = 'شاهد الآن';
+    $('spotlightContext').textContent = [ep.seriesTitle && ep.seriesTitle !== ep.title ? ep.seriesTitle : '',ep.year || '',state.source === 'cinemana' ? 'سينمانا' : 'قرمزي'].filter(Boolean).join(' · ');
 
     spotlightPlayBtn.onclick = () => {
       haptic();
@@ -584,17 +590,18 @@
   }
 
   function renderPinnedResume() {
-    const item = state.history[0];
+    const item = state.history.find(entry => (window.OtiumCinemana?.owns(entry.url) ? 'cinemana' : 'krmzi') === state.source);
     if (!item) {
       spotlightProgressWrap.classList.add('hidden');
-      spotlightPlayBtnText.textContent = 'مشاهدة الحلقة';
+      spotlightPlayBtnText.textContent = 'شاهد الآن';
       return false;
     }
 
     if (item.thumbnail) setHeroImage(item.thumbnail);
     spotlightTitle.textContent = item.seriesTitle || item.title;
     const episodeLabel = item.episodeNum ? `الحلقة ${item.episodeNum}` : '';
-    spotlightBadgeText.innerHTML = `<i class="fa-solid fa-clock-rotate-left"></i> مثبت • آخر ما شاهدت${
+    $('spotlightContext').textContent = state.source === 'cinemana' ? 'سينمانا' : 'قرمزي';
+    spotlightBadgeText.innerHTML = `متابعة المشاهدة${
       episodeLabel ? ` • ${escapeHtml(episodeLabel)}` : ''
     }`;
     spotlightProgressWrap.classList.remove('hidden');
@@ -936,7 +943,7 @@
     drawerEpisodesCarousel.innerHTML = '';
     drawerCount.textContent = 'جاري جلب الحلقات…';
     mobilePlayer.classList.remove('hidden');
-    setPlayerBackdrop(context.series?.poster || context.series?.thumbnail || context.known?.thumbnail || '');
+    setPlayerBackdrop(context.series?.poster || context.series?.artwork || context.series?.thumbnail || context.known?.artwork || context.known?.thumbnail || '');
     resetSpinner('جاري الاتصال بسيرفر الحلقة…');
     playerSpinner.classList.remove('hidden');
     hudEpTitle.textContent = context.known?.title || 'جاري تحميل الحلقة…';
@@ -951,7 +958,7 @@
       if (episode.error || episode.isSuccess === false) throw new Error(episode.error || 'No episode');
 
       // Keep catalogue art; the episode-page poster is not requested at all.
-      episode.artwork = context.series?.poster || context.series?.thumbnail || context.known?.thumbnail || '';
+      episode.artwork = context.series?.poster || context.series?.artwork || context.series?.thumbnail || context.known?.artwork || context.known?.thumbnail || '';
       state.currentEpisode = episode;
       setupEpisodeSubtitles(episode);
       saveHistory(true);
@@ -971,7 +978,7 @@
       else {
         drawerCount.textContent = 'فيلم';
         $('drawerEpisodeTools')?.classList.add('hidden');
-        drawerEpisodesCarousel.innerHTML = '<div class="episode-empty"><i class="fa-solid fa-film"></i><p>أنت تشاهد فيلماً</p><span>المشاهدة مستمرة، استمتع بوقتك مع Otium Play.</span></div>';
+        drawerEpisodesCarousel.innerHTML = '<div class="episode-empty"><i class="fa-solid fa-film"></i><p>أنت تشاهد فيلماً</p><span>يمكنك تغيير الجودة من المشغل.</span></div>';
       }
     } catch (error) {
       if (controller.signal.aborted || session !== playbackSession) return;
@@ -1305,6 +1312,8 @@
     if (!duration || !Number.isFinite(duration)) return;
 
     const percent = clamp((current / duration) * 100, 0, 100);
+    timelineBar.setAttribute('aria-valuenow',String(Math.round(percent)));
+    timelineBar.setAttribute('aria-valuetext',`${formatTime(current)} من ${formatTime(duration)}`);
     timelineProgress.style.width = `${percent}%`;
     timelineThumb.style.right = `${100 - percent}%`;
 
@@ -1463,6 +1472,7 @@
     state.activeQuality = null;
     renderHistory();
     if (state.activeTab === 'library') renderLibrary();
+    window.OtiumDisplay?.focusHome(true);
   }
 
   async function loadDrawer(seriesUrl, currentEpisodeUrl, session = playbackSession) {
@@ -1510,7 +1520,7 @@
     const attrs = sheet ? 'data-sheet="episode"' : 'data-action="episode"';
     return `<button class="episode-card ${sheet ? 'sheet-episode-btn' : ''} ${active ? 'active' : ''}" ${attrs} data-url="${escapeHtml(episode.url)}" ${active ? 'aria-current="true"' : ''}>
       <span class="episode-art">${artwork ? imageTag(artwork, '', '', false) : '<i class="fa-solid fa-film"></i>'}<span class="episode-play"><i class="fa-solid ${active ? 'fa-volume-high' : 'fa-play'}"></i></span>${progress ? `<span class="episode-progress" style="width:${progress}%"></span>` : ''}</span>
-      <span class="episode-copy"><small>${active ? 'تشاهد الآن' : saved?.currentTime > 10 ? 'متابعة المشاهدة' : `الحلقة ${escapeHtml(number)}`}</small><strong>${escapeHtml(episode.title || `الحلقة ${number}`)}</strong><span>${episode.season ? `الموسم ${escapeHtml(episode.season)} · ` : ''}${saved?.currentTime > 10 ? `وصلت إلى ${formatTime(saved.currentTime)}` : 'جاهزة للمشاهدة'}</span></span>
+      <span class="episode-copy"><small>${active ? 'تشاهد الآن' : saved?.currentTime > 10 ? 'متابعة' : ''}</small><strong>${escapeHtml(episode.title || `الحلقة ${number}`)}</strong><span>${saved?.currentTime > 10 ? `وصلت إلى ${formatTime(saved.currentTime)}` : ''}</span></span>
       <span class="episode-number">${escapeHtml(number)}</span></button>`;
   }
   function renderDrawerEpisodes() {
@@ -1525,6 +1535,7 @@
     const isFavorite = state.favorites.some(
       (item) => item.url === state.currentEpisode.url
     );
+    playerFavBtn.setAttribute('aria-pressed',String(isFavorite));
     playerFavBtn.innerHTML = isFavorite
       ? '<i class="fa-solid fa-heart" style="color:var(--accent)"></i>'
       : '<i class="fa-regular fa-heart"></i>';
@@ -1596,6 +1607,7 @@
 
   function hideHud() {
     if (!mobilePlayer.classList.contains('embed-mode') && nativePlayer.paused) return;
+    if(window.OtiumDisplay?.isTV() && mobilePlayer.contains(document.activeElement)) playerCanvas.focus({preventScroll:true});
     playerHudTop.classList.add('hud-hidden');
     playerHudBottom.classList.add('hud-hidden');
     hudCenter.classList.add('hud-hidden');
@@ -1777,6 +1789,13 @@
       state.autoNextTimerId = null;
     });
 
+    timelineBar.addEventListener('keydown', event => {
+      if (!['ArrowLeft','ArrowRight','Home','End'].includes(event.key)) return;
+      event.preventDefault();event.stopPropagation();
+      if (event.key==='Home') nativePlayer.currentTime=0;
+      else if(event.key==='End' && Number.isFinite(nativePlayer.duration)) nativePlayer.currentTime=nativePlayer.duration;
+      else seekRelative(event.key==='ArrowLeft'?10:-10);
+    });
     timelineBar.addEventListener('click', (event) => {
       if (!nativePlayer.duration) return;
       haptic();
@@ -1821,6 +1840,10 @@
       showHud(false);
     });
 
+    $('openEpisodesSheetBtn').addEventListener('click',()=>{
+      const episodes=state.currentSeriesEpisodes;
+      openSheet('الحلقات',`<div class="episode-card-list episode-select-list">${episodes.map((ep,i)=>episodeCard(ep,i,state.currentEpisode?.artwork || '',state.currentEpisode?.url,true)).join('') || '<p class="empty-note">لا توجد حلقات لهذا العمل.</p>'}</div>`);
+    });
     openServersSheetBtn.addEventListener('click', () => {
       haptic();
       openServersSheet();
@@ -1877,7 +1900,8 @@
     // Desktop / TV keyboard shortcuts. Cheap to keep and useful on web.
     document.addEventListener('keydown', (event) => {
       if (mobilePlayer.classList.contains('hidden')) return;
-      if (event.target.matches('input, textarea') || !sheetBackdrop.classList.contains('hidden')) return;
+      if (event.target.matches('input, textarea, select') || !sheetBackdrop.classList.contains('hidden')) return;
+      if(window.OtiumDisplay?.isTV() && ['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Enter',' '].includes(event.key)) return;
 
       switch (event.key) {
         case ' ':
@@ -1909,7 +1933,18 @@
   /*  Bottom sheet                                                       */
   /* ------------------------------------------------------------------ */
 
+  let sheetReturnFocus = null;
   function setupBottomSheet() {
+    sheetBackdrop.addEventListener('keydown',event=>{
+      if(event.key==='Escape'){event.preventDefault();event.stopPropagation();closeSheet();return;}
+      const row=event.target.closest('[data-sheet]');
+      if((event.key==='Enter'||event.key===' ') && row && row.tagName!=='BUTTON'){event.preventDefault();row.click();return;}
+      if(event.key!=='Tab')return;
+      const focusable=[...sheetBackdrop.querySelectorAll('button,input,[tabindex="0"]')].filter(el=>el.getClientRects().length&&!el.disabled);
+      const first=focusable[0],last=focusable[focusable.length-1];
+      if(event.shiftKey&&document.activeElement===first){event.preventDefault();last?.focus();}
+      else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first?.focus();}
+    });
     playerSpinner.addEventListener('click', (event) => {
       if (event.target.closest('[data-player-source]')) { closePlayer(); document.querySelector('[data-source="krmzi"]').click(); }
       if (event.target.closest('[data-player-retry]')) openEpisode(activeEpisodeUrl, true);
@@ -1969,17 +2004,20 @@
   }
 
   function openSheet(title, itemsHtml) {
+    if(sheetBackdrop.classList.contains('hidden')) sheetReturnFocus=document.activeElement;
     state.sheetToken += 1;
     sheetTitle.textContent = title;
     sheetBody.innerHTML = itemsHtml;
     sheetBody.scrollTop = 0;
     sheetBackdrop.classList.remove('hidden');
+    closeSheetBtn.focus({preventScroll:true});
   }
 
   function closeSheet() {
     state.sheetToken += 1;
     sheetBackdrop.classList.add('hidden');
     sheetBody.innerHTML = '';
+    if(sheetReturnFocus?.isConnected) sheetReturnFocus.focus({preventScroll:true});
   }
 
   function openServersSheet() {
@@ -1992,8 +2030,8 @@
       const isActive = state.activeServer?.name?.includes('مباشر');
       itemsHtml += `
         <div class="sheet-row ${isActive ? 'active' : ''}" data-sheet="server-direct" role="button" tabindex="0">
-          <span><i class="fa-solid fa-bolt" style="color:#10b981"></i> سيرفر مباشر (بدون إعلانات ⚡)</span>
-          <span class="sheet-pill direct">${isActive ? 'يعمل الآن ✓' : '1080p'}</span>
+          <span><i class="fa-solid fa-bolt" style="color:#10b981"></i> المشغل المباشر</span>
+          <span class="sheet-pill direct">${isActive ? 'الحالي' : '1080p'}</span>
         </div>`;
     }
 
@@ -2009,7 +2047,7 @@
       itemsHtml += `
         <div class="sheet-row ${isActive ? 'active' : ''}" data-sheet="server-embed" data-index="${index}" role="button" tabindex="0">
           <span><i class="fa-solid fa-server"></i> سيرفر ${escapeHtml(server.name || '')}</span>
-          <span class="sheet-pill ${isActive ? 'direct' : ''}">${isActive ? 'يعمل الآن ✓' : 'تشغيل'}</span>
+          <span class="sheet-pill ${isActive ? 'direct' : ''}">${isActive ? 'الحالي' : 'تشغيل'}</span>
         </div>`;
     });
 
@@ -2026,7 +2064,7 @@
       return;
     }
 
-    const itemsHtml = `<button class="sheet-row ${state.qualityMode === 'auto' ? 'active' : ''}" data-sheet="quality-auto"><span>تلقائي · بدء سريع</span>${state.qualityMode === 'auto' ? '<i class="fa-solid fa-check"></i>' : ''}</button>` + streams
+    const itemsHtml = `<button class="sheet-row ${state.qualityMode === 'auto' ? 'active' : ''}" data-sheet="quality-auto"><span>تلقائي</span>${state.qualityMode === 'auto' ? '<i class="fa-solid fa-check"></i>' : ''}</button>` + streams
       .map((stream, index) => {
         if (stream.type === 'hls') return '';
         const isActive = state.qualityMode === 'manual' && state.activeQuality?.quality === stream.quality;
@@ -2060,15 +2098,15 @@
       const itemsHtml = `
         <div class="series-detail-hero">
           ${imageTag(series.poster || series.thumbnail, series.title, 'series-detail-art', true)}
-          <div class="series-detail-shade"></div><div class="series-detail-info"><span class="series-source-tag">${window.OtiumCinemana?.owns(url) ? 'سينمانا' : 'قرمزي'} · OTIUM PLAY</span><h4>${escapeHtml(series.title)}</h4><div class="series-detail-meta">${series.year ? `<span>${escapeHtml(series.year)}</span>` : ''}<span>${episodes.length} حلقة</span><span>${seasons.length} موسم</span></div></div>
+          <div class="series-detail-shade"></div><div class="series-detail-info"><span class="series-source-tag">${window.OtiumCinemana?.owns(url) ? 'سينمانا' : 'قرمزي'}</span><h4>${escapeHtml(series.title)}</h4><div class="series-detail-meta">${series.year ? `<span>${escapeHtml(series.year)}</span>` : ''}<span>${episodes.length} حلقة</span><span>${seasons.length} موسم</span></div></div>
         </div>
-        <p class="series-detail-story">${escapeHtml(series.story || 'اختر حلقتك واستمتع بالمشاهدة.')}</p>
-        <div class="series-episode-heading"><h5>الحلقات</h5><span>اختر حلقة للبدء أو المتابعة</span></div>
+        <p class="series-detail-story">${escapeHtml(series.story || '')}</p>
+        <div class="series-episode-heading"><h5>الحلقات</h5><span></span></div>
         <div class="season-tabs" id="sheetSeasonTabs">${seasons.map((season,i)=>`<button class="season-tab ${i===0?'active':''}" data-sheet-season="${escapeHtml(season)}">الموسم ${escapeHtml(season)}</button>`).join('')}</div>
         <label class="episode-search"><i class="fa-solid fa-magnifying-glass"></i><input id="sheetEpisodeSearch" type="search" placeholder="ابحث عن رقم أو عنوان الحلقة" aria-label="ابحث عن حلقة"></label>
         <div class="sheet-episode-grid episode-card-list" id="seriesEpisodeList">${episodes.map((ep,i)=>episodeCard(ep,i,series.poster || series.thumbnail,'',true)).join('') || '<p class="empty-note">الحلقات غير متاحة حالياً. حاول مجدداً لاحقاً.</p>'}</div>`;
 
-      openSheet(series.title || 'المسلسل', itemsHtml);
+      openSheet('تفاصيل العمل', itemsHtml);
       let season = seasons[0] || '1';
       const renderList = () => {
         const query = $('sheetEpisodeSearch').value.trim();
@@ -2095,12 +2133,14 @@
   /* ------------------------------------------------------------------ */
 
   function setupNavigation() {
+    document.querySelectorAll('[data-source]').forEach(item=>{const active=item.dataset.source===state.source;item.classList.toggle('active',active);item.setAttribute('aria-pressed',String(active));});
     document.querySelectorAll('[data-source]').forEach(button => button.addEventListener('click', async () => {
       if (state.loadingHome || state.source === button.dataset.source) return;
+      try { localStorage.setItem('otium_source', button.dataset.source); } catch (_) {}
       state.searchAbort?.abort();
       state.source = button.dataset.source;
       document.querySelectorAll('[data-source]').forEach(item => { const active=item===button; item.classList.toggle('active', active); item.setAttribute('aria-pressed', String(active)); });
-      $('sourceNetworkNote').classList.toggle('hidden', state.source !== 'cinemana');
+      $('sourceNetworkNote').classList.add('hidden');
       $('sourceStatus').textContent = 'جاري الاتصال…';
       state.episodes=[]; state.series=[]; state.filteredSeries=[];
       apiCache.clear();
@@ -2160,6 +2200,7 @@
     state.activeTab = tab;
     dockBtns.forEach((button) => {
       button.classList.toggle('active', button.dataset.tab === tab);
+      button.setAttribute('aria-current',button.dataset.tab === tab ? 'page' : 'false');
     });
 
     if (tab === 'home') {
@@ -2237,6 +2278,7 @@
         haptic();
         genrePills.forEach((item) => item.classList.remove('active'));
         pill.classList.add('active');
+        genrePills.forEach(item=>item.setAttribute('aria-pressed',String(item===pill)));
         state.activeFilter = pill.dataset.filter || 'all';
         applyGenreFilter();
       });

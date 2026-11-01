@@ -2,10 +2,10 @@
 (() => {
   const ref = (id) => `cinemana:${id}`;
   const idOf = (url) => String(url || '').match(/^cinemana:(\d+)$/)?.[1];
-  const artwork = (item) => item.imgMediumThumbObjUrl || item.imgObjUrl || item.imgThumbObjUrl || '';
+  const artwork = (item) => item.imgObjUrl || item.imgMediumThumbObjUrl || item.imgThumbObjUrl || '';
   const title = (item) => item.ar_title || item.en_title || 'بدون عنوان';
   const rootId = (item) => item.rootSeries && item.rootSeries !== '0' ? item.rootSeries : item.nb;
-  const card = (item) => ({ url: ref(item.nb), title: title(item), thumbnail: artwork(item), seriesTitle: title(item),
+  const card = (item) => ({ url: ref(item.nb), title: title(item), thumbnail: item.imgMediumThumbObjUrl || artwork(item), artwork: artwork(item), seriesTitle: title(item),
     source: 'cinemana', type: String(item.kind) === '1' ? 'episode' : 'series', year: item.year || '', rating: item.stars || '',
     seriesUrl: String(item.kind) === '1' ? '' : ref(rootId(item)) });
   async function request(path, signal) {

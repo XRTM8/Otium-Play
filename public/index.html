@@ -2,12 +2,12 @@
 <html lang="ar" dir="rtl">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <title>Otium Play</title>
   
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <meta name="theme-color" content="#070709">
+  <meta name="theme-color" content="#111110">
   <meta name="color-scheme" content="dark">
   <meta name="referrer" content="no-referrer">
   <link rel="manifest" href="manifest.json">
@@ -21,7 +21,7 @@
   <link rel="stylesheet" href="fonts/tajawal.css">
   <link rel="stylesheet" href="vendor/fontawesome/css/all.min.css">
 
-  <link rel="stylesheet" href="styles.css?v=1.2.0">
+  <link rel="stylesheet" href="styles.css?v=1.3.0">
 </head>
 <body>
 
@@ -30,9 +30,9 @@
 
     <!-- Minimal Header -->
     <header class="top-nav">
-      <div class="nav-brand" id="brandBtn">
-        <span class="brand-mark" aria-hidden="true">▶</span><span class="brand-text" dir="ltr">Otium <b>Play</b></span>
-      </div>
+      <button class="nav-brand" id="brandBtn" aria-label="Otium Play — الرئيسية">
+        <span class="brand-mark" aria-hidden="true"><i class="fa-solid fa-play"></i></span><span class="brand-text" dir="ltr">otium<span>play</span></span>
+      </button>
       <button class="nav-icon-btn" id="openSearchBtn" aria-label="بحث">
         <i class="fa-solid fa-magnifying-glass"></i>
       </button>
@@ -58,12 +58,12 @@
       </div>
 
       <section class="source-switcher" aria-label="مصدر المشاهدة">
-        <div class="source-label"><span>مصادر المشاهدة</span><small id="sourceStatus" role="status">اختر مكتبتك</small></div>
+        <div class="source-label"><span>المكتبة</span><small id="sourceStatus" role="status"></small></div>
         <div class="source-options">
-          <button class="source-option active" data-source="krmzi" aria-pressed="true">قرمزي <span>مسلسلات تركية</span></button>
-          <button class="source-option" data-source="cinemana" aria-pressed="false">سينمانا <span>أفلام ومسلسلات</span></button>
+          <button class="source-option active" data-source="krmzi" aria-pressed="true">قرمزي</button>
+          <button class="source-option" data-source="cinemana" aria-pressed="false">سينمانا</button>
         </div>
-        <p class="source-network-note hidden" id="sourceNetworkNote">توفر سينمانا يعتمد على شبكتك. إذا تعذر الاتصال، اختر قرمزي.</p>
+        <p class="source-network-note hidden" id="sourceNetworkNote">تعذّر الوصول إلى سينمانا. جرّب قرمزي أو أعد المحاولة.</p>
       </section>
 
       <!-- Hero Cinematic Spotlight -->
@@ -73,7 +73,8 @@
           <div class="spotlight-fade"></div>
           <div class="spotlight-meta">
             <span class="spotlight-tag" id="spotlightBadgeText">الحلقة الأحدث</span>
-            <h1 class="spotlight-heading" id="spotlightTitle">تحميل المسلسلات...</h1>
+            <h1 class="spotlight-heading" id="spotlightTitle">جاري التحميل</h1>
+            <p class="spotlight-context" id="spotlightContext"></p>
             <div class="resume-progress-wrap hidden" id="spotlightProgressWrap">
               <div class="resume-progress-track">
                 <div class="resume-progress-bar" id="spotlightProgressBar"></div>
@@ -83,10 +84,10 @@
             <div class="spotlight-btn-row">
               <button class="btn-play-hero" id="spotlightPlayBtn">
                 <i class="fa-solid fa-play"></i>
-                <span id="spotlightPlayBtnText">مشاهدة الحلقة</span>
+                <span id="spotlightPlayBtnText">شاهد الآن</span>
               </button>
               <button class="btn-icon-hero" id="spotlightSeriesBtn" aria-label="الحلقات">
-                <i class="fa-solid fa-list"></i>
+                <i class="fa-solid fa-list"></i><span>التفاصيل</span>
               </button>
             </div>
           </div>
@@ -106,25 +107,21 @@
       <section class="feed-section" id="episodesSection">
         <div class="section-headline">
           <h3>أحدث الحلقات</h3>
-          <span class="headline-pill">مباشر</span>
         </div>
         <div class="h-carousel" id="episodesCarousel"></div>
       </section>
 
-      <!-- Genre Pills -->
-      <div class="genre-chips-wrap" id="genreChipsWrap">
-        <button class="genre-pill active" data-filter="all">الكل</button>
-        <button class="genre-pill" data-filter="دراما">دراما</button>
-        <button class="genre-pill" data-filter="أكشن">أكشن</button>
-        <button class="genre-pill" data-filter="رومانسي">رومانسي</button>
-        <button class="genre-pill" data-filter="تاريخي">تاريخي</button>
-        <button class="genre-pill" data-filter="كوميدي">كوميدي</button>
+      <div class="genre-chips-wrap" id="genreChipsWrap" aria-label="ترتيب المكتبة">
+        <span class="sort-label">ترتيب حسب</span>
+        <button class="genre-pill active" data-filter="all" aria-pressed="true">الأحدث</button>
+        <button class="genre-pill" data-filter="az" aria-pressed="false">الاسم</button>
+        <button class="genre-pill" data-filter="year" aria-pressed="false">السنة</button>
       </div>
 
       <!-- Series Grid Section -->
       <section class="feed-section" id="seriesSection">
         <div class="section-headline">
-          <h3>جميع المسلسلات</h3>
+          <h3>المسلسلات</h3>
           <span class="headline-muted" id="seriesCountSub">المكتبة</span>
         </div>
         <div class="media-grid" id="seriesGrid"></div>
@@ -141,6 +138,7 @@
         </div>
         <div class="media-grid" id="libraryGrid"></div>
 
+        <div class="display-preference"><div><h3>طريقة العرض</h3><p>تتكيف الواجهة مع جهازك. اختر التلفزيون عند استخدام ريموت.</p></div><select id="displayModeSelect" aria-label="طريقة العرض"><option value="auto">تلقائي</option><option value="tv">تلفزيون</option></select></div>
         <!-- App Info & System Update Card -->
         <div class="app-version-card" id="appVersionCard">
           <div class="version-meta">
@@ -149,12 +147,12 @@
             </div>
             <div class="version-text">
               <span class="v-label">إصدار التطبيق</span>
-              <span class="v-val" id="installedVersionText">v1.2.0</span>
+              <span class="v-val" id="installedVersionText">v1.3.0</span>
             </div>
           </div>
           <button class="check-update-btn" id="manualCheckUpdateBtn">
             <i class="fa-solid fa-arrows-rotate" id="checkUpdateIcon"></i>
-            <span id="checkUpdateBtnText">التحقق من التحديثات</span>
+            <span id="checkUpdateBtnText">بحث عن تحديث</span>
           </button>
         </div>
       </section>
@@ -162,7 +160,7 @@
     </main>
 
     <!-- Floating Frosted Bottom Dock -->
-    <nav class="bottom-dock">
+    <nav class="bottom-dock" aria-label="التنقل">
       <div class="dock-bar">
         <button class="dock-btn active" data-tab="home" id="tabHome">
           <i class="fa-solid fa-house"></i>
@@ -189,13 +187,13 @@
         <button class="btn-back" id="closeSearchOverlay"><i class="fa-solid fa-chevron-right"></i></button>
         <div class="search-bar-wrap">
           <i class="fa-solid fa-magnifying-glass"></i>
-          <input type="text" id="overlaySearchInput" placeholder="ابحث عن مسلسل..." autocomplete="off" spellcheck="false" enterkeyhint="search">
+          <input type="text" id="overlaySearchInput" placeholder="فيلم، مسلسل…" autocomplete="off" spellcheck="false" enterkeyhint="search">
           <button class="search-clear hidden" id="clearSearchInput"><i class="fa-solid fa-xmark"></i></button>
         </div>
       </div>
       <div class="search-scroll-area">
         <div class="search-zero-state" id="searchInitialState">
-          <p>اكتب اسم المسلسل للبحث الفوري بدون إعلانات</p>
+          <i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i><h3>عن ماذا تبحث؟</h3><p>اكتب اسم فيلم أو مسلسل.</p>
         </div>
         <div class="media-grid hidden" id="searchGrid"></div>
       </div>
@@ -205,7 +203,7 @@
     <div class="player-screen hidden" id="mobilePlayer">
       
       <!-- Video Stage -->
-      <div class="video-stage" id="playerCanvas">
+      <div class="video-stage" id="playerCanvas" tabindex="-1">
         <div class="player-backdrop" id="playerBackdrop" aria-hidden="true"></div>
         <!-- Native Direct Video Stream (Hidden by default to eliminate any Chromium broken play icon) -->
         <video id="nativePlayer" playsinline webkit-playsinline preload="none" referrerpolicy="no-referrer" class="video-elem hidden"></video>
@@ -264,25 +262,25 @@
 
         <!-- Player Top Bar -->
         <div class="player-bar-top" id="playerHudTop">
-          <button class="hud-circle-btn" id="dismissPlayerBtn"><i class="fa-solid fa-chevron-down"></i></button>
+          <button class="hud-circle-btn" id="dismissPlayerBtn" aria-label="إغلاق المشغل"><i class="fa-solid fa-chevron-down"></i></button>
           <div class="hud-center-title">
             <h4 id="hudEpTitle">عنوان الحلقة</h4>
             <span id="hudSeriesTitle">المسلسل</span>
           </div>
-          <button class="hud-circle-btn" id="playerFavBtn"><i class="fa-regular fa-heart"></i></button>
+          <button class="hud-circle-btn" id="playerFavBtn" aria-label="حفظ في المفضلة"><i class="fa-regular fa-heart"></i></button>
         </div>
 
         <!-- Center Play/Pause Control -->
         <div class="player-center-ctrl" id="hudCenter">
-          <button class="ctrl-circle" id="centerRewind"><i class="fa-solid fa-rotate-left"></i></button>
-          <button class="ctrl-circle primary" id="centerPlay"><i class="fa-solid fa-play"></i></button>
-          <button class="ctrl-circle" id="centerForward"><i class="fa-solid fa-rotate-right"></i></button>
+          <button class="ctrl-circle" id="centerRewind" aria-label="تأخير عشر ثوان"><i class="fa-solid fa-rotate-left"></i></button>
+          <button class="ctrl-circle primary" id="centerPlay" aria-label="تشغيل أو إيقاف"><i class="fa-solid fa-play"></i></button>
+          <button class="ctrl-circle" id="centerForward" aria-label="تقديم عشر ثوان"><i class="fa-solid fa-rotate-right"></i></button>
         </div>
 
         <!-- Player Bottom Controls -->
         <div class="player-bar-bottom" id="playerHudBottom">
           <!-- Timeline Scrubber -->
-          <div class="scrub-line" id="timelineBar">
+          <div class="scrub-line" id="timelineBar" role="slider" tabindex="0" aria-label="موضع المشاهدة" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
             <div class="scrub-loaded" id="timelineLoaded"></div>
             <div class="scrub-current" id="timelineProgress"></div>
             <div class="scrub-pin" id="timelineThumb"></div>
@@ -299,9 +297,10 @@
                 <i class="fa-solid fa-gear"></i>
                 <span id="activeQualityLabel">1080p</span>
               </button>
+              <button class="action-capsule episodes-menu-button" id="openEpisodesSheetBtn" aria-label="قائمة الحلقات"><i class="fa-solid fa-list"></i><span>الحلقات</span></button>
               <button class="action-circle-icon hidden" id="toggleSubtitlesBtn" aria-label="الترجمة" title="الترجمة">CC</button>
-              <button class="action-circle-icon" id="togglePipBtn"><i class="fa-solid fa-clone"></i></button>
-              <button class="action-circle-icon" id="toggleFullscreenBtn"><i class="fa-solid fa-expand"></i></button>
+              <button class="action-circle-icon" id="togglePipBtn" aria-label="صورة داخل صورة"><i class="fa-solid fa-clone"></i></button>
+              <button class="action-circle-icon" id="toggleFullscreenBtn" aria-label="ملء الشاشة"><i class="fa-solid fa-expand"></i></button>
             </div>
           </div>
         </div>
@@ -312,17 +311,17 @@
         <!-- Dedicated Server Switcher Quick Bar -->
         <div class="drawer-server-bar" id="drawerServerBar">
           <div class="drawer-server-info">
-            <span class="d-label">سيرفر البث:</span>
+            <span class="d-label">المشغل</span>
             <span class="d-val" id="drawerActiveServerName">تلقائي</span>
           </div>
           <button class="drawer-switch-server-btn" id="drawerOpenServersBtn">
             <i class="fa-solid fa-server"></i>
-            <span>تبديل السيرفر</span>
+            <span>تغيير</span>
           </button>
         </div>
 
         <div class="drawer-topline">
-          <span class="drawer-heading">جميع الحلقات</span>
+          <span class="drawer-heading">الحلقات</span>
           <span class="drawer-badge" id="drawerCount">0 حلقة</span>
         </div>
         <div class="episode-toolbar" id="drawerEpisodeTools"><div class="season-tabs" id="drawerSeasonTabs"></div><label class="episode-search"><i class="fa-solid fa-magnifying-glass"></i><input id="drawerEpisodeSearch" type="search" placeholder="ابحث عن حلقة" aria-label="ابحث عن حلقة"></label></div>
@@ -370,6 +369,7 @@
 
   <script src="vendor/hls/hls.min.js" defer></script>
   <script src="providers/cinemana.js" defer></script>
-  <script src="app.js?v=1.2.0" defer></script>
+  <script src="device-ui.js" defer></script>
+  <script src="app.js?v=1.3.0" defer></script>
 </body>
 </html>
