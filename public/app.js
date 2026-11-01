@@ -12,7 +12,7 @@
  */
 
 (() => {
-  const APP_VERSION = '1.3.0';
+  const APP_VERSION = '1.4.0';
   const FAVS_KEY = 'krmzi_favs';
   const HIST_KEY = 'krmzi_hist';
   const PREF_QUALITY_KEY = 'krmzi_pref_quality';
@@ -20,7 +20,7 @@
   const MAX_HISTORY = 30;
   const HISTORY_SAVE_INTERVAL = 5000;
   const API_TIMEOUT = 15000;
-  const GITHUB_RELEASES = 'https://api.github.com/repos/XRTM8/krmzi-app/releases/latest';
+  const GITHUB_RELEASES = 'https://api.github.com/repos/XRTM8/Otium-Play/releases/latest';
 
   const $ = (id) => document.getElementById(id);
 
@@ -51,7 +51,9 @@
   }
 
   const state = {
-    source: readString('otium_source', 'krmzi') === 'cinemana' ? 'cinemana' : 'krmzi',
+    source: ['all','krmzi','cinemana'].includes(readString('otium_source','all')) ? readString('otium_source','all') : 'all',
+    movies: [],
+    homeAbort: null,
     activeTab: 'home',
     previousTab: 'home',
     librarySubtab: 'favs',
@@ -319,7 +321,7 @@
     if (endpoint === '/api/episode/detail') {
       options = { ...options, noCache: true, noStaleFallback: true };
     }
-    const source = params.url ? (window.OtiumCinemana?.owns(params.url) ? 'cinemana' : 'krmzi') : state.source;
+    const source = options.source || (params.url ? (window.OtiumCinemana?.owns(params.url) ? 'cinemana' : 'krmzi') : state.source);
     if (source === 'cinemana' && window.OtiumCinemana) return window.OtiumCinemana.call(endpoint, params, options.signal);
     const key = apiCacheKey(endpoint, params);
     const ttl = options.cacheTtl ?? API_TTL[endpoint] ?? 120_000;
@@ -395,67 +397,55 @@
   /*  Home data                                                          */
   /* ------------------------------------------------------------------ */
 
+  function mergedCatalogue(items) { return window.OtiumCatalogue.merge(items, readString('otium_preferred_source','cinemana')); }
+  function sourceName(source) { return source==='cinemana'?'سينمانا':'قرمزي'; }
+  function sourceCaption(item) {
+    const sources=item.sources || [window.OtiumCatalogue.provider(item)];
+    return `<span class="catalogue-sources">${sources.map(source=>`<span class="provider-tag provider-${source}">${sourceName(source)}</span>`).join('')}</span>`;
+  }
+  function animateView(element) {
+    if(!element || matchMedia('(prefers-reduced-motion: reduce)').matches)return;
+    element.animate([{opacity:.65,transform:'translateY(5px)'},{opacity:1,transform:'none'}],{duration:190,easing:'ease-out'});
+  }
   async function loadData(isRefresh = false) {
-    if (state.loadingHome) return;
-    state.loadingHome = true;
-    if (isRefresh) haptic('double');
-    hideOfflineState();
-
-    if (state.episodes.length === 0) renderEpisodesSkeleton();
-    if (state.series.length === 0) renderSeriesSkeleton();
-
-    try {
-      let home;
-      try {
-        home = await apiCall('/api/home', { page: 1 });
-        if (!home?.episodes || !home?.series) {
-          throw new Error('Incomplete /api/home payload');
-        }
-      } catch (homeError) {
-        if (state.source === 'cinemana') throw homeError;
-        // Backward compatible fallback for older native builds that do not
-        // expose /api/home yet.
-        const [episodes, series] = await Promise.all([
-          apiCall('/api/episodes', { page: 1 }),
-          apiCall('/api/series', { page: 1 }),
-        ]);
-        home = { episodes, series };
-      }
-
-      const episodes = home?.episodes?.episodes || [];
-      const series = home?.series?.series || [];
-
-      state.episodes = episodes;
-      state.series = series;
-      state.filteredSeries = filterSeries(series, state.activeFilter);
-
-      if (seriesCountSub) seriesCountSub.textContent = `${series.length} مسلسل`;
-      document.querySelector('[data-filter="year"]').disabled = !series.some(item => Number(item.year)>0);
-
-      $('sourceStatus').textContent = '';
-      $('sourceNetworkNote').classList.add('hidden');
-      document.querySelector('#episodesSection h3').textContent = state.source === 'cinemana' ? 'أحدث الأفلام' : 'أحدث الحلقات';
-      renderEpisodesCarousel(episodes);
-      renderSeriesGrid(state.filteredSeries);
-      renderSpotlight(episodes[0]);
-      renderHistory();
-      window.OtiumDisplay?.focusHome();
-
-      if (episodes.length === 0 && series.length === 0) checkAndShowOffline();
-      else hideOfflineState();
-    } catch (error) {
-      $('sourceStatus').textContent = state.source === 'cinemana' ? 'غير متاح حالياً' : 'تعذر الاتصال';
-      $('sourceNetworkNote').classList.toggle('hidden', state.source !== 'cinemana');
-      console.error('Error during loadData:', error);
-      // Keep whatever was already rendered; only show the error card when
-      // there is genuinely nothing to display.
-      checkAndShowOffline();
-      if (state.episodes.length) renderEpisodesCarousel(state.episodes);
-      if (state.series.length) renderSeriesGrid(state.filteredSeries);
-    } finally {
-      state.loadingHome = false;
-      pullRefreshIndicator?.classList.remove('visible');
+    state.homeAbort?.abort();
+    const controller=new AbortController();state.homeAbort=controller;
+    state.loadingHome=true;hideOfflineState();
+    if(isRefresh)haptic('double');
+    const source=state.source,requested=source==='all'?['krmzi','cinemana']:[source];
+    const loaded={},failed=new Set(),pending=new Set(requested);
+    if(!state.episodes.length)renderEpisodesSkeleton();
+    if(!state.series.length)renderSeriesSkeleton();
+    function paint(){
+      if(controller.signal.aborted || state.source!==source)return;
+      const kr=loaded.krmzi,cin=loaded.cinemana;
+      const list=[...(kr?.series?.series||[]).map(item=>({...item,source:'krmzi',type:'series'})),...(cin?.series?.series||[]).map(item=>({...item,type:'series'}))];
+      if(Object.keys(loaded).length){
+        state.episodes=source==='cinemana'?(cin?.episodes?.episodes||[]):(kr?.episodes?.episodes||[]);
+        state.movies=source==='all'?(cin?.episodes?.episodes||[]):[];
+        state.series=mergedCatalogue(list);state.filteredSeries=filterSeries(state.series,state.activeFilter);
+        if(seriesCountSub)seriesCountSub.textContent=`${state.series.length} مسلسل`;
+        document.querySelector('[data-filter="year"]').disabled=!state.series.some(item=>Number(item.year)>0);
+        document.querySelector('#episodesSection h3').textContent=source==='cinemana'?'أحدث الأفلام':'أحدث الحلقات';
+        renderEpisodesCarousel(state.episodes);renderSeriesGrid(state.filteredSeries);
+        $('moviesCarousel').innerHTML=state.movies.slice(0,16).map(item=>episodeTile(item)).join('');
+        $('moviesSection').classList.toggle('hidden',state.activeTab!=='home'||!state.movies.length);
+        episodesSection.classList.toggle('hidden',state.activeTab!=='home'||!state.episodes.length);
+        renderSpotlight(state.episodes[0]||state.movies[0]);renderHistory();hideOfflineState();
+        window.OtiumDisplay?.focusHome();
+      } else if(!pending.size){state.episodes=[];state.movies=[];state.series=[];state.filteredSeries=[];renderEpisodesCarousel([]);renderSeriesGrid([]);checkAndShowOffline();}
+      $('sourceStatus').textContent=pending.size?`جاري تحميل ${[...pending].map(sourceName).join(' و')}…`:failed.size?`${[...failed].map(sourceName).join(' و')} غير متاح حالياً`:source==='all'?'مكتبة موحّدة':'';
+      $('sourceNetworkNote').classList.toggle('hidden',source!=='cinemana'||!failed.has('cinemana'));
     }
+    await Promise.all(requested.map(async provider=>{
+      try {
+        const home=await apiCall('/api/home',{page:1},{source:provider,signal:controller.signal,noCache:isRefresh});
+        if(!home?.episodes||!home?.series)throw Error('Incomplete catalogue');
+        if(!controller.signal.aborted)loaded[provider]=home;
+      } catch(error){if(!controller.signal.aborted)failed.add(provider);}
+      finally{pending.delete(provider);paint();}
+    }));
+    if(state.homeAbort===controller){state.loadingHome=false;pullRefreshIndicator?.classList.remove('visible');}
   }
 
   async function fetchEpisodes() {
@@ -508,7 +498,7 @@
           ${badge}
         </div>
         <div class="ep-tile-name">${escapeHtml(ep.title)}</div>
-        <div class="ep-tile-series">${escapeHtml(subtitle)}</div>
+        <div class="ep-tile-series">${escapeHtml(subtitle)}</div>${sourceCaption(ep)}
       </div>`;
   }
 
@@ -518,12 +508,15 @@
         ${imageTag(series.thumbnail, series.title, 'series-tile-thumb')}
         <div class="series-tile-body">
           <div class="series-tile-title">${escapeHtml(series.title)}</div>
-          <div class="series-tile-sub">${escapeHtml([series.year,Number(series.rating)>0 ? `★ ${Number(series.rating).toFixed(1)}` : ''].filter(Boolean).join('  ·  '))}</div>
+          <div class="series-tile-sub">${escapeHtml([series.year,Number(series.rating)>0 ? `★ ${Number(series.rating).toFixed(1)}` : ''].filter(Boolean).join('  ·  '))}</div>${sourceCaption(series)}
         </div>
       </div>`;
   }
 
   function renderEpisodesCarousel(episodes) {
+    const signature=episodes.map(item=>item.url).join('|');
+    if(episodesCarousel.dataset.renderKey===signature&&episodesCarousel.childElementCount)return;
+    episodesCarousel.dataset.renderKey=signature;
     if (!episodes.length) {
       episodesCarousel.innerHTML =
         '<p class="empty-note">لا توجد حلقات جديدة حالياً.</p>';
@@ -540,6 +533,9 @@
   }
 
   function renderSeriesGrid(seriesList) {
+    const signature=seriesList.map(item=>item.url+':'+(item.sources||[]).join(',')).join('|');
+    if(seriesGrid.dataset.renderKey===signature&&seriesGrid.childElementCount)return;
+    seriesGrid.dataset.renderKey=signature;
     if (!seriesList.length) {
       seriesGrid.innerHTML =
         '<p class="empty-note" style="grid-column:1/-1">لا توجد مسلسلات تطابق هذا التصنيف.</p>';
@@ -564,7 +560,7 @@
       : 'جديد في المكتبة';
     spotlightProgressWrap.classList.add('hidden');
     spotlightPlayBtnText.textContent = 'شاهد الآن';
-    $('spotlightContext').textContent = [ep.seriesTitle && ep.seriesTitle !== ep.title ? ep.seriesTitle : '',ep.year || '',state.source === 'cinemana' ? 'سينمانا' : 'قرمزي'].filter(Boolean).join(' · ');
+    $('spotlightContext').textContent = [ep.seriesTitle && ep.seriesTitle !== ep.title ? ep.seriesTitle : '',ep.year || '',state.source === 'all' ? 'كل المصادر' : state.source === 'cinemana' ? 'سينمانا' : 'قرمزي'].filter(Boolean).join(' · ');
 
     spotlightPlayBtn.onclick = () => {
       haptic();
@@ -590,7 +586,7 @@
   }
 
   function renderPinnedResume() {
-    const item = state.history.find(entry => (window.OtiumCinemana?.owns(entry.url) ? 'cinemana' : 'krmzi') === state.source);
+    const item = state.history.find(entry => (window.OtiumCinemana?.owns(entry.url) ? 'cinemana' : 'krmzi') === state.source || state.source==='all');
     if (!item) {
       spotlightProgressWrap.classList.add('hidden');
       spotlightPlayBtnText.textContent = 'شاهد الآن';
@@ -600,7 +596,7 @@
     if (item.thumbnail) setHeroImage(item.thumbnail);
     spotlightTitle.textContent = item.seriesTitle || item.title;
     const episodeLabel = item.episodeNum ? `الحلقة ${item.episodeNum}` : '';
-    $('spotlightContext').textContent = state.source === 'cinemana' ? 'سينمانا' : 'قرمزي';
+    $('spotlightContext').textContent = state.source === 'all' ? 'كل المصادر' : state.source === 'cinemana' ? 'سينمانا' : 'قرمزي';
     spotlightBadgeText.innerHTML = `متابعة المشاهدة${
       episodeLabel ? ` • ${escapeHtml(episodeLabel)}` : ''
     }`;
@@ -811,22 +807,28 @@
       ).join('');
     }
 
-    try {
-      const data = await apiCall(
-        '/api/search',
-        { q: trimmed },
-        { signal, cacheTtl: API_TTL['/api/search'] }
-      );
-      if (signal?.aborted) return;
-      renderSearchResults(data.results || []);
-    } catch (error) {
-      if (error?.name === 'AbortError') return;
-      searchGrid.innerHTML =
-        '<p class="empty-note" style="grid-column:1/-1">تعذر البحث. يرجى المحاولة لاحقاً.</p>';
-    }
+    const requested=state.source==='all'?['krmzi','cinemana']:[state.source];
+    const results=[],pending=new Set(requested),failed=new Set();
+    $('searchSourceStatus').textContent='جاري البحث…';
+    await Promise.all(requested.map(async source=>{
+      try{
+        const data=await apiCall('/api/search',{q:trimmed},{source,signal,cacheTtl:API_TTL['/api/search']});
+        if(signal?.aborted)return;
+        results.push(...(data.results||[]).map(item=>({...item,source})));
+      }catch(error){if(signal?.aborted)return;failed.add(source);}
+      finally{
+        pending.delete(source);
+        if(!signal?.aborted){
+          if(results.length||!pending.size)renderSearchResults(mergedCatalogue(results));
+          $('searchSourceStatus').textContent=pending.size?`جاري البحث في ${[...pending].map(sourceName).join(' و')}…`:failed.size?`نتائج المصادر المتاحة · ${[...failed].map(sourceName).join(' و')} غير متاح`: `${mergedCatalogue(results).length} نتيجة`;
+        }
+      }
+    }));
   }
 
+  let currentSearchResults=[];
   function renderSearchResults(results) {
+    currentSearchResults=results;
     const unique = [];
     const seen = new Set();
     for (const item of results) {
@@ -851,7 +853,7 @@
             ${imageTag(item.thumbnail, item.title, 'series-tile-thumb')}
             <div class="series-tile-body">
               <div class="series-tile-title">${escapeHtml(item.title)}</div>
-              <div class="series-tile-sub">${isSeries ? 'مسلسل كامل' : 'حلقة'}</div>
+              <div class="series-tile-sub">${isSeries ? 'مسلسل' : item.mediaType==='movie'?'فيلم':'حلقة'}</div>${sourceCaption(item)}
             </div>
           </div>`;
       })
@@ -1033,7 +1035,8 @@
     mobilePlayer.classList.remove('embed-mode', 'video-playing', 'player-error');
     timelineProgress.style.width = '0%';
     timelineLoaded.style.width = '0%';
-    timelineThumb.style.right = '100%';
+    timelineThumb.style.right = '';
+    timelineThumb.style.left = '0%';
     hudTime.textContent = '00:00 / 00:00';
     skipIntroBtn.classList.add('hidden');
     autoNextCard.classList.add('hidden');
@@ -1315,7 +1318,7 @@
     timelineBar.setAttribute('aria-valuenow',String(Math.round(percent)));
     timelineBar.setAttribute('aria-valuetext',`${formatTime(current)} من ${formatTime(duration)}`);
     timelineProgress.style.width = `${percent}%`;
-    timelineThumb.style.right = `${100 - percent}%`;
+    timelineThumb.style.left = `${percent}%`;
 
     const timeText = `${formatTime(current)} / ${formatTime(duration)}`;
     if (hudTime.textContent !== timeText) hudTime.textContent = timeText;
@@ -1582,6 +1585,7 @@
       0,
       nativePlayer.duration
     );
+    showPill(seconds>0?'fa-forward':'fa-backward',`${seconds>0?'+':''}${seconds} ثانية`);
     resetHudTimer();
   }
 
@@ -1638,6 +1642,7 @@
     let touchStartY = 0;
     let longPressTimer = null;
     let is2xActive = false;
+    let previousRate = 1;
     let isVerticalSwipe = false;
     let swipeTarget = null;
     let startVal = 1;
@@ -1666,6 +1671,7 @@
           if (!nativePlayer.paused && !isVerticalSwipe) {
             is2xActive = true;
             haptic('double');
+            previousRate=nativePlayer.playbackRate;
             nativePlayer.playbackRate = 2;
             speed2xPill.classList.remove('hidden');
           }
@@ -1717,7 +1723,7 @@
       if (is2xActive) {
         is2xActive = false;
         haptic();
-        nativePlayer.playbackRate = 1;
+        nativePlayer.playbackRate = previousRate;
         speed2xPill.classList.add('hidden');
         return;
       }
@@ -1752,6 +1758,7 @@
       lastTapTime = now;
     });
 
+    gesturesLayer.addEventListener('touchcancel',()=>{clearTimeout(longPressTimer);if(is2xActive)nativePlayer.playbackRate=previousRate;is2xActive=false;speed2xPill.classList.add('hidden');});
     centerPlay.addEventListener('click', () => {
       haptic();
       togglePlay();
@@ -1789,21 +1796,24 @@
       state.autoNextTimerId = null;
     });
 
-    timelineBar.addEventListener('keydown', event => {
-      if (!['ArrowLeft','ArrowRight','Home','End'].includes(event.key)) return;
+    const seekToPointer=(event)=>{
+      if(!Number.isFinite(nativePlayer.duration)||!nativePlayer.duration)return;
+      const rect=timelineBar.getBoundingClientRect();
+      nativePlayer.currentTime=clamp((event.clientX-rect.left)/rect.width,0,1)*nativePlayer.duration;
+      updateProgressUI();resetHudTimer();
+    };
+    timelineBar.addEventListener('keydown',event=>{
+      if(!['ArrowLeft','ArrowRight','Home','End'].includes(event.key))return;
       event.preventDefault();event.stopPropagation();
-      if (event.key==='Home') nativePlayer.currentTime=0;
-      else if(event.key==='End' && Number.isFinite(nativePlayer.duration)) nativePlayer.currentTime=nativePlayer.duration;
-      else seekRelative(event.key==='ArrowLeft'?10:-10);
+      if(event.key==='Home')nativePlayer.currentTime=0;
+      else if(event.key==='End'&&Number.isFinite(nativePlayer.duration))nativePlayer.currentTime=nativePlayer.duration;
+      else seekRelative((event.key==='ArrowLeft'?-1:1)*(event.shiftKey?30:5));
+      updateProgressUI();
     });
-    timelineBar.addEventListener('click', (event) => {
-      if (!nativePlayer.duration) return;
-      haptic();
-      const rect = timelineBar.getBoundingClientRect();
-      const position = clamp((rect.right - event.clientX) / rect.width, 0, 1);
-      nativePlayer.currentTime = position * nativePlayer.duration;
-      resetHudTimer();
-    });
+    timelineBar.addEventListener('pointerdown',event=>{event.preventDefault();timelineBar.setPointerCapture(event.pointerId);seekToPointer(event);});
+    timelineBar.addEventListener('pointermove',event=>{if(timelineBar.hasPointerCapture(event.pointerId))seekToPointer(event);});
+    timelineBar.addEventListener('pointerup',event=>{if(timelineBar.hasPointerCapture(event.pointerId))timelineBar.releasePointerCapture(event.pointerId);});
+    timelineBar.addEventListener('click',seekToPointer);
 
     nativePlayer.addEventListener('timeupdate', onTimeUpdate);
     nativePlayer.addEventListener('progress', onProgress);
@@ -1897,36 +1907,40 @@
       toggleFavorite();
     });
 
-    // Desktop / TV keyboard shortcuts. Cheap to keep and useful on web.
-    document.addEventListener('keydown', (event) => {
-      if (mobilePlayer.classList.contains('hidden')) return;
-      if (event.target.matches('input, textarea, select') || !sheetBackdrop.classList.contains('hidden')) return;
-      if(window.OtiumDisplay?.isTV() && ['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Enter',' '].includes(event.key)) return;
-
-      switch (event.key) {
-        case ' ':
-          event.preventDefault();
-          togglePlay();
-          break;
-        case 'ArrowLeft':
-          event.preventDefault();
-          seekRelative(-10);
-          break;
-        case 'ArrowRight':
-          event.preventDefault();
-          seekRelative(10);
-          break;
-        case 'f':
-        case 'F':
-          toggleFullscreenBtn.click();
-          break;
-        case 'Escape':
-          if (!document.fullscreenElement) closePlayer();
-          break;
-        default:
-          break;
+    $('controlsHelpBtn').addEventListener('click',openControlsHelp);
+    window.OtiumControls={seek:seekRelative,toggle:togglePlay};
+    document.addEventListener('keydown',event=>{
+      if(event.target.matches('input,textarea,select,[contenteditable="true"]')||event.ctrlKey||event.altKey||event.metaKey)return;
+      if(!sheetBackdrop.classList.contains('hidden'))return;
+      if(event.key==='?'||(!mobilePlayer.classList.contains('hidden')&&event.key==='/')){event.preventDefault();openControlsHelp();return;}
+      if(mobilePlayer.classList.contains('hidden')){
+        if(event.key==='/'||event.key.toLowerCase()==='s'){event.preventDefault();openSearch();}
+        return;
       }
+      if(window.OtiumDisplay?.isTV()&&['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Enter',' '].includes(event.key))return;
+      if(event.key===' '&&event.target.closest('button,[role="button"]'))return;
+      const key=event.key.toLowerCase();
+      const actions={
+        ' ':togglePlay,k:togglePlay,j:()=>seekRelative(-10),l:()=>seekRelative(10),
+        arrowleft:()=>seekRelative(event.shiftKey?-30:-5),arrowright:()=>seekRelative(event.shiftKey?30:5),
+        arrowup:()=>changeVolume(.05),arrowdown:()=>changeVolume(-.05),
+        m:()=>{nativePlayer.muted=!nativePlayer.muted;showPill(nativePlayer.muted?'fa-volume-xmark':'fa-volume-high',nativePlayer.muted?'الصوت مكتوم':'الصوت مفعّل');},
+        f:()=>toggleFullscreenBtn.click(),p:()=>togglePipBtn.click(),c:()=>$('toggleSubtitlesBtn').click(),
+        e:()=>$('openEpisodesSheetBtn').click(),q:openQualitySheet,s:openServersSheet,n:playNextEpisodeNow,
+        '[':()=>changePlaybackSpeed(-.25),']':()=>changePlaybackSpeed(.25),
+        escape:()=>{if(!document.fullscreenElement)closePlayer();},
+      };
+      if(/^[0-9]$/.test(key)&&Number.isFinite(nativePlayer.duration)){
+        event.preventDefault();nativePlayer.currentTime=Number(key)/10*nativePlayer.duration;updateProgressUI();showPill('fa-clock',formatTime(nativePlayer.currentTime));return;
+      }
+      if(actions[key]){event.preventDefault();actions[key]();}
     });
+  }
+  function changeVolume(delta){nativePlayer.muted=false;nativePlayer.volume=clamp(nativePlayer.volume+delta,0,1);showPill('fa-volume-high',`${Math.round(nativePlayer.volume*100)}%`);}
+  function changePlaybackSpeed(delta){nativePlayer.playbackRate=clamp(nativePlayer.playbackRate+delta,.5,2);showPill('fa-gauge',`${nativePlayer.playbackRate}×`);}
+  function openControlsHelp(){
+    const rows=[['Space / K','تشغيل وإيقاف'],['J / L','رجوع وتقديم 10 ثوانٍ'],['← / →','5 ثوانٍ · مع Shift: 30 ثانية'],['↑ / ↓','رفع وخفض الصوت'],['0–9','الانتقال لنسبة من الفيديو'],['M','كتم الصوت'],['F / P','ملء الشاشة / صورة مصغرة'],['C / Q','الترجمة / الجودة'],['E / S','الحلقات / المصادر'],['[ / ]','سرعة العرض'],['N','الحلقة التالية'],['Esc','إغلاق القائمة أو المشغل']];
+    openSheet('اختصارات التحكم',`<div class="controls-guide"><p>الهاتف: انقر مرتين للتقديم أو الرجوع. اضغط مطوّلاً لسرعة 2×، واسحب شريط الوقت للتنقّل.</p><p>الريموت: الأسهم للتنقّل، والاختيار للتشغيل. عند إخفاء الأزرار: يمين ويسار للتقديم والرجوع.</p><div class="shortcut-list">${rows.map(([key,text])=>`<div><kbd dir="ltr">${key}</kbd><span>${text}</span></div>`).join('')}</div></div>`);
   }
 
   /* ------------------------------------------------------------------ */
@@ -1967,6 +1981,8 @@
       if (!row) return;
       haptic();
       const kind = row.dataset.sheet;
+
+      if(kind==='provider-episode'){switchEpisodeProvider(row.dataset.url);return;}
 
       if (kind === 'episode') {
         const url = row.dataset.url;
@@ -2024,7 +2040,8 @@
     const episode = state.currentEpisode;
     if (!episode) return;
 
-    let itemsHtml = '';
+    const group=seriesGroup(episode.seriesUrl);
+    let itemsHtml = (group?.offers||[]).filter(offer=>offer.url!==episode.seriesUrl).map(offer=>`<button class="sheet-row" data-sheet="provider-episode" data-url="${escapeHtml(offer.url)}"><span>نفس المسلسل من ${sourceName(window.OtiumCatalogue.provider(offer))}</span><i class="fa-solid fa-arrow-right-arrow-left"></i></button>`).join('');
 
     if (episode.directStreams?.length) {
       const isActive = state.activeServer?.name?.includes('مباشر');
@@ -2054,6 +2071,20 @@
     openSheet('سيرفرات المشاهدة', itemsHtml);
   }
 
+  async function switchEpisodeProvider(url){
+    const current=state.currentEpisode;if(!current)return;
+    const session=playbackSession;
+    openSheet('جاري البحث عن الحلقة','<div class="spinner-ring" style="margin:20px auto"></div>');
+    const token=state.sheetToken;
+    try{
+      const series=await apiCall('/api/series/detail',{url});
+      if(token!==state.sheetToken||session!==playbackSession)return;
+      const match=window.OtiumCatalogue.matchEpisode(current,series.episodes||[]);
+      if(match){closeSheet();seriesContext=series;openEpisode(match.url);}
+      else openSeriesByUrl(url);
+    }catch(error){if(token===state.sheetToken)openSheet('المصدر غير متاح','<p class="empty-note">تعذر تغيير المصدر. المشاهدة الحالية مستمرة.</p>');}
+  }
+
   function openQualitySheet() {
     const streams = state.currentEpisode?.directStreams;
     if (!streams?.length) {
@@ -2079,8 +2110,14 @@
     openSheet('اختيار الدقة', itemsHtml);
   }
 
+  function seriesGroup(url) {return [...state.series,...currentSearchResults].find(item=>item.url===url||item.offers?.some(offer=>offer.url===url));}
+  function seriesSources(group,activeUrl) {
+    const offers=group?.offers||[];
+    return offers.length>1?`<div class="series-provider-picker"><span>شاهد من</span>${offers.map(offer=>`<button class="series-provider-option ${offer.url===activeUrl?'active':''}" data-series-source="${escapeHtml(offer.url)}" aria-pressed="${offer.url===activeUrl}">${sourceName(window.OtiumCatalogue.provider(offer))}</button>`).join('')}</div>`:'';
+  }
   async function openSeriesByUrl(url) {
     if (!url) return;
+    const group=seriesGroup(url);
     openSheet('جاري التحميل...', '<div class="spinner-ring" style="margin:20px auto"></div>');
     const token = state.sheetToken;
 
@@ -2100,6 +2137,7 @@
           ${imageTag(series.poster || series.thumbnail, series.title, 'series-detail-art', true)}
           <div class="series-detail-shade"></div><div class="series-detail-info"><span class="series-source-tag">${window.OtiumCinemana?.owns(url) ? 'سينمانا' : 'قرمزي'}</span><h4>${escapeHtml(series.title)}</h4><div class="series-detail-meta">${series.year ? `<span>${escapeHtml(series.year)}</span>` : ''}<span>${episodes.length} حلقة</span><span>${seasons.length} موسم</span></div></div>
         </div>
+        ${seriesSources(group,url)}
         <p class="series-detail-story">${escapeHtml(series.story || '')}</p>
         <div class="series-episode-heading"><h5>الحلقات</h5><span></span></div>
         <div class="season-tabs" id="sheetSeasonTabs">${seasons.map((season,i)=>`<button class="season-tab ${i===0?'active':''}" data-sheet-season="${escapeHtml(season)}">الموسم ${escapeHtml(season)}</button>`).join('')}</div>
@@ -2107,6 +2145,7 @@
         <div class="sheet-episode-grid episode-card-list" id="seriesEpisodeList">${episodes.map((ep,i)=>episodeCard(ep,i,series.poster || series.thumbnail,'',true)).join('') || '<p class="empty-note">الحلقات غير متاحة حالياً. حاول مجدداً لاحقاً.</p>'}</div>`;
 
       openSheet('تفاصيل العمل', itemsHtml);
+      sheetBody.querySelectorAll('[data-series-source]').forEach(button=>button.addEventListener('click',()=>{try{localStorage.setItem('otium_preferred_source',window.OtiumCatalogue.provider({url:button.dataset.seriesSource}));}catch(_){} openSeriesByUrl(button.dataset.seriesSource);}));
       let season = seasons[0] || '1';
       const renderList = () => {
         const query = $('sheetEpisodeSearch').value.trim();
@@ -2124,7 +2163,8 @@
     } catch (error) {
       if (token !== state.sheetToken) return;
       console.warn('Series detail failed:', error);
-      openSheet('خطأ', '<p class="empty-note">تعذر جلب الحلقات.</p>');
+      const alternatives=(group?.offers||[]).filter(offer=>offer.url!==url);
+      openSheet('تعذر الوصول للمصدر',`<p class="empty-note">تعذر جلب الحلقات من ${sourceName(window.OtiumCatalogue.provider({url}))}.</p>${alternatives.map(offer=>`<button class="sheet-row" data-action="series" data-url="${escapeHtml(offer.url)}">جرّب ${sourceName(window.OtiumCatalogue.provider(offer))}</button>`).join('')}`);
     }
   }
 
@@ -2135,14 +2175,17 @@
   function setupNavigation() {
     document.querySelectorAll('[data-source]').forEach(item=>{const active=item.dataset.source===state.source;item.classList.toggle('active',active);item.setAttribute('aria-pressed',String(active));});
     document.querySelectorAll('[data-source]').forEach(button => button.addEventListener('click', async () => {
-      if (state.loadingHome || state.source === button.dataset.source) return;
+      if (state.source === button.dataset.source) return;
       try { localStorage.setItem('otium_source', button.dataset.source); } catch (_) {}
       state.searchAbort?.abort();
       state.source = button.dataset.source;
       document.querySelectorAll('[data-source]').forEach(item => { const active=item===button; item.classList.toggle('active', active); item.setAttribute('aria-pressed', String(active)); });
       $('sourceNetworkNote').classList.add('hidden');
       $('sourceStatus').textContent = 'جاري الاتصال…';
-      state.episodes=[]; state.series=[]; state.filteredSeries=[];
+      state.episodes=[]; state.movies=[];state.series=[]; state.filteredSeries=[];
+      $('moviesSection').classList.add('hidden');
+      episodesCarousel.dataset.renderKey='';seriesGrid.dataset.renderKey='';
+      animateView(contentCanvas);
       apiCache.clear();
       switchTab('home');
       await loadData(true);
@@ -2228,6 +2271,8 @@
       renderLibrary();
     }
 
+    $('moviesSection').classList.toggle('hidden',tab!=='home'||!state.movies.length);
+    animateView(contentCanvas);
     contentCanvas.scrollTo({ top: 0, behavior: 'smooth' });
   }
 
@@ -2433,7 +2478,7 @@
         if (apkAsset) apkUrl = apkAsset.browser_download_url || '';
       }
       if (!apkUrl) {
-        apkUrl = json.html_url || 'https://github.com/XRTM8/krmzi-app/releases/latest';
+        apkUrl = json.html_url || 'https://github.com/XRTM8/Otium-Play/releases/latest';
       }
 
       updateInfo = {

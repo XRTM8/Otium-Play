@@ -7,7 +7,7 @@
   
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <meta name="theme-color" content="#111110">
+  <meta name="theme-color" content="#08090f">
   <meta name="color-scheme" content="dark">
   <meta name="referrer" content="no-referrer">
   <link rel="manifest" href="manifest.json">
@@ -21,7 +21,7 @@
   <link rel="stylesheet" href="fonts/tajawal.css">
   <link rel="stylesheet" href="vendor/fontawesome/css/all.min.css">
 
-  <link rel="stylesheet" href="styles.css?v=1.3.0">
+  <link rel="stylesheet" href="styles.css?v=1.4.0">
 </head>
 <body>
 
@@ -60,7 +60,8 @@
       <section class="source-switcher" aria-label="مصدر المشاهدة">
         <div class="source-label"><span>المكتبة</span><small id="sourceStatus" role="status"></small></div>
         <div class="source-options">
-          <button class="source-option active" data-source="krmzi" aria-pressed="true">قرمزي</button>
+          <button class="source-option active" data-source="all" aria-pressed="true">كل المصادر</button>
+          <button class="source-option" data-source="krmzi" aria-pressed="false">قرمزي</button>
           <button class="source-option" data-source="cinemana" aria-pressed="false">سينمانا</button>
         </div>
         <p class="source-network-note hidden" id="sourceNetworkNote">تعذّر الوصول إلى سينمانا. جرّب قرمزي أو أعد المحاولة.</p>
@@ -111,6 +112,8 @@
         <div class="h-carousel" id="episodesCarousel"></div>
       </section>
 
+      <section class="feed-section hidden" id="moviesSection"><div class="section-headline"><h3>أفلام من سينمانا</h3></div><div class="h-carousel" id="moviesCarousel"></div></section>
+
       <div class="genre-chips-wrap" id="genreChipsWrap" aria-label="ترتيب المكتبة">
         <span class="sort-label">ترتيب حسب</span>
         <button class="genre-pill active" data-filter="all" aria-pressed="true">الأحدث</button>
@@ -139,6 +142,7 @@
         <div class="media-grid" id="libraryGrid"></div>
 
         <div class="display-preference"><div><h3>طريقة العرض</h3><p>تتكيف الواجهة مع جهازك. اختر التلفزيون عند استخدام ريموت.</p></div><select id="displayModeSelect" aria-label="طريقة العرض"><option value="auto">تلقائي</option><option value="tv">تلفزيون</option></select></div>
+        <button class="controls-help-link" id="controlsHelpBtn"><i class="fa-regular fa-keyboard"></i><span>اختصارات التحكم</span><span class="keycap">?</span></button>
         <!-- App Info & System Update Card -->
         <div class="app-version-card" id="appVersionCard">
           <div class="version-meta">
@@ -147,7 +151,7 @@
             </div>
             <div class="version-text">
               <span class="v-label">إصدار التطبيق</span>
-              <span class="v-val" id="installedVersionText">v1.3.0</span>
+              <span class="v-val" id="installedVersionText">v1.4.0</span>
             </div>
           </div>
           <button class="check-update-btn" id="manualCheckUpdateBtn">
@@ -195,7 +199,7 @@
         <div class="search-zero-state" id="searchInitialState">
           <i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i><h3>عن ماذا تبحث؟</h3><p>اكتب اسم فيلم أو مسلسل.</p>
         </div>
-        <div class="media-grid hidden" id="searchGrid"></div>
+        <p class="search-source-status" id="searchSourceStatus" role="status"></p><div class="media-grid hidden" id="searchGrid"></div>
       </div>
     </div>
 
@@ -272,9 +276,9 @@
 
         <!-- Center Play/Pause Control -->
         <div class="player-center-ctrl" id="hudCenter">
-          <button class="ctrl-circle" id="centerRewind" aria-label="تأخير عشر ثوان"><i class="fa-solid fa-rotate-left"></i></button>
+          <button class="ctrl-circle" id="centerRewind" aria-label="تأخير عشر ثوان"><i class="fa-solid fa-rotate-left"></i><span class="seek-step">10</span></button>
           <button class="ctrl-circle primary" id="centerPlay" aria-label="تشغيل أو إيقاف"><i class="fa-solid fa-play"></i></button>
-          <button class="ctrl-circle" id="centerForward" aria-label="تقديم عشر ثوان"><i class="fa-solid fa-rotate-right"></i></button>
+          <button class="ctrl-circle" id="centerForward" aria-label="تقديم عشر ثوان"><i class="fa-solid fa-rotate-right"></i><span class="seek-step">10</span></button>
         </div>
 
         <!-- Player Bottom Controls -->
@@ -369,7 +373,8 @@
 
   <script src="vendor/hls/hls.min.js" defer></script>
   <script src="providers/cinemana.js" defer></script>
+  <script src="catalogue.js" defer></script>
   <script src="device-ui.js" defer></script>
-  <script src="app.js?v=1.3.0" defer></script>
+  <script src="app.js?v=1.4.0" defer></script>
 </body>
 </html>

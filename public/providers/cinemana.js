@@ -6,7 +6,7 @@
   const title = (item) => item.ar_title || item.en_title || 'بدون عنوان';
   const rootId = (item) => item.rootSeries && item.rootSeries !== '0' ? item.rootSeries : item.nb;
   const card = (item) => ({ url: ref(item.nb), title: title(item), thumbnail: item.imgMediumThumbObjUrl || artwork(item), artwork: artwork(item), seriesTitle: title(item),
-    source: 'cinemana', type: String(item.kind) === '1' ? 'episode' : 'series', year: item.year || '', rating: item.stars || '',
+    source: 'cinemana', aliases:[item.en_title,item.other_title].filter(Boolean),mediaType:String(item.kind)==='1'?'movie':'series', type: String(item.kind) === '1' ? 'episode' : 'series', year: item.year || '', rating: item.stars || '',
     seriesUrl: String(item.kind) === '1' ? '' : ref(rootId(item)) });
   async function request(path, signal) {
     const response = await fetch('/api/cinemana?path=' + encodeURIComponent(path), { signal, cache:'no-store' });

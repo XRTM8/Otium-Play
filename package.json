@@ -1,11 +1,11 @@
 {
   "name": "otium-play",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "description": "Otium Play \u2014 multi-source movies and series",
   "main": "index.js",
   "scripts": {
     "start": "node server.js",
-    "test": "node --test tests/stream-resolution.test.js tests/media-proxy.test.js tests/cinemana.test.js",
+    "test": "node --test tests/stream-resolution.test.js tests/media-proxy.test.js tests/cinemana.test.js tests/catalogue.test.js",
     "test:ui": "node tests/frontend-player.test.cjs"
   },
   "keywords": [],

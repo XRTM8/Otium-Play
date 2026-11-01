@@ -34,8 +34,8 @@ class MainActivity : AppCompatActivity() {
     private companion object {
         const val TAG = "KrmziMainActivity"
         const val APP_URL = "https://appassets.androidplatform.net/assets/public/index.html"
-        const val FALLBACK_VERSION_NAME = "1.3.0"
-        const val FALLBACK_VERSION_CODE = 12L
+        const val FALLBACK_VERSION_NAME = "1.4.0"
+        const val FALLBACK_VERSION_CODE = 13L
     }
 
     private lateinit var webView: WebView
@@ -140,7 +140,7 @@ class MainActivity : AppCompatActivity() {
         fun checkForUpdates(): String {
             var connection: HttpURLConnection? = null
             return try {
-                val url = URL("https://api.github.com/repos/XRTM8/krmzi-app/releases/latest")
+                val url = URL("https://api.github.com/repos/XRTM8/Otium-Play/releases/latest")
                 val conn = (url.openConnection() as HttpURLConnection).apply {
                     connectTimeout = 8_000
                     readTimeout = 8_000
@@ -178,7 +178,7 @@ class MainActivity : AppCompatActivity() {
                 if (apkUrl.isEmpty()) {
                     apkUrl = json.optString(
                         "html_url",
-                        "https://github.com/XRTM8/krmzi-app/releases/latest"
+                        "https://github.com/XRTM8/Otium-Play/releases/latest"
                     )
                 }
 
@@ -259,7 +259,7 @@ class MainActivity : AppCompatActivity() {
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT
             )
-            setBackgroundColor(Color.parseColor("#111110"))
+            setBackgroundColor(Color.parseColor("#08090f"))
         }
 
         assetLoader = WebViewAssetLoader.Builder()

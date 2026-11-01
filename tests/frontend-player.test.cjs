@@ -28,6 +28,8 @@ const failures = [];
 let delayEpisode = 0;
 let failEpisode = false;
 let failCinemana = false;
+let unifiedFixture=false;
+let delayCinemana=0;
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
   requests.push(url.pathname + url.search);
@@ -37,17 +39,20 @@ const server = http.createServer(async (req, res) => {
     let data;
     switch (url.pathname) {
       case '/api/cinemana': {
+        if(delayCinemana)await new Promise(resolve=>setTimeout(resolve,delayCinemana));
         if (failCinemana) {res.statusCode=503;data={error:'unavailable'};break;}
         const route=url.searchParams.get('path');
-        const item={nb:'700',ar_title:'مسلسل سينمانا',kind:'2',season:'1',episodeNummer:'1',rootSeries:'0',imgObjUrl:artwork};
+        const item={nb:'700',ar_title:unifiedFixture?'مسلسل التجربة':'مسلسل سينمانا',kind:'2',season:'1',episodeNummer:'1',rootSeries:'0',imgObjUrl:artwork};
         if(route.startsWith('latestSeries'))data=[item];
         else if(route.startsWith('latestMovies'))data=[{...item,nb:'800',kind:'1',ar_title:'فيلم سينمانا'}];
         else if(route.startsWith('videoSeason/'))data=[item,{...item,nb:'701',episodeNummer:'2',rootSeries:'700'},{...item,nb:'702',season:'2',rootSeries:'700'}];
         else if(route.startsWith('allVideoInfo/'))data={...item,...(route.endsWith('702')?{nb:'702',season:'2',rootSeries:'700'}:{})};
         else if(route.startsWith('transcoddedFiles/'))data=[{resolution:'720p',container:'mp4',videoUrl:'https://cdn.shabakaty.com/test-720.mp4'}];
+        else if(route.startsWith('video/V/'))data=[item];
         else data=[];
         break;
       }
+      case '/api/search': data={results:[{...series,type:'series'}]};break;
       case '/api/home': data = { episodes: { episodes }, series: { series: [series] } }; break;
       case '/api/episodes': data = { episodes }; break;
       case '/api/series': data = { series: [series] }; break;
@@ -89,7 +94,8 @@ const server = http.createServer(async (req, res) => {
   } catch { res.statusCode = 404; res.end(); }
 });
 
-async function mediaMock() {
+async function mediaMock(source = 'krmzi') {
+  try { if(!localStorage.getItem('otium_source'))localStorage.setItem('otium_source',source); } catch (_) {}
   Object.defineProperty(navigator, 'connection', { configurable: true, value: { effectiveType: '4g', saveData: false } });
   window.__media = { time: 0, duration: 1800, paused: true, readyState: 0, bufferedEnd: 0, loads: [], plays: 0 };
   const p = HTMLMediaElement.prototype;
@@ -336,13 +342,15 @@ async function run() {
     failCinemana=false;
     await sourceContext.close();
     console.log('PASS Otium: identity,source switch,Cinemana seasons,episode search,player cards,unavailable source');
+    unifiedFixture=true;
     for (const tvViewport of [{width:1280,height:720},{width:1920,height:1080}]) {
       const tvContext=await browser.newContext({viewport:tvViewport,serviceWorkers:'block',userAgent:'Mozilla/5.0 (Linux; Android TV) Chrome/120.0.0.0 Safari/537.36'});
-      await tvContext.addInitScript(mediaMock);
+      await tvContext.addInitScript(mediaMock,'all');
       const tvPage=await tvContext.newPage();
       tvPage.on('pageerror',error=>failures.push(error.message));
       await tvPage.goto(origin);
       await tvPage.locator('#seriesGrid [data-action="series"]').first().waitFor();
+      await tvPage.waitForFunction(()=>document.querySelector('#seriesGrid .catalogue-sources')?.children.length===2);
       assert.equal(await tvPage.locator('html').getAttribute('data-display'),'tv');
       assert.equal(await tvPage.evaluate(()=>document.activeElement.id),'spotlightPlayBtn');
       const dock=await tvPage.locator('.bottom-dock').boundingBox();
@@ -380,6 +388,54 @@ async function run() {
       await tvContext.close();
       console.log(`PASS TV${tvViewport.width}: detection,large type,top navigation,D-pad,episode menu,remote Back`);
     }
+    unifiedFixture=true;delayCinemana=300;
+    const unifiedContext=await browser.newContext({viewport:{width:390,height:844},serviceWorkers:'block'});
+    await unifiedContext.addInitScript(mediaMock,'all');
+    const unifiedPage=await unifiedContext.newPage();
+    unifiedPage.on('pageerror',error=>failures.push(error.message));
+    await unifiedPage.goto(origin);
+    await unifiedPage.locator('#episodesCarousel [data-action="episode"]').first().waitFor();
+    assert(await unifiedPage.locator('#sourceStatus').textContent().then(text=>text.includes('سينمانا')),'Fast source paints while slower provider loads');
+    await unifiedPage.waitForFunction(()=>document.querySelector('#seriesGrid .catalogue-sources')?.children.length===2);
+    assert.equal(await unifiedPage.locator('#seriesGrid [data-action="series"]').count(),1,'Duplicate series has one card');
+    await unifiedPage.locator('#seriesGrid [data-action="series"]').click();
+    await unifiedPage.locator('[data-series-source]').first().waitFor();
+    assert.equal(await unifiedPage.locator('[data-series-source]').count(),2,'Details retain provider choice');
+    await unifiedPage.locator('[data-series-source]').filter({hasText:'قرمزي'}).click();
+    await unifiedPage.waitForFunction(()=>document.querySelectorAll('.sheet-episode-btn').length===80);
+    await unifiedPage.locator('.sheet-episode-btn').first().click();
+    await unifiedPage.waitForFunction(()=>document.getElementById('nativePlayer').src.endsWith('/hd.mp4'));
+    await unifiedPage.evaluate(()=>{window.__ready();window.__media.time=120;});
+    await unifiedPage.locator('#playerCanvas').focus();
+    await unifiedPage.keyboard.press('l');assert.equal(await unifiedPage.evaluate(()=>window.__media.time),130);
+    await unifiedPage.keyboard.press('j');assert.equal(await unifiedPage.evaluate(()=>window.__media.time),120);
+    await unifiedPage.keyboard.press('ArrowLeft');assert.equal(await unifiedPage.evaluate(()=>window.__media.time),115);
+    await unifiedPage.keyboard.press('Shift+ArrowRight');assert.equal(await unifiedPage.evaluate(()=>window.__media.time),145);
+    await unifiedPage.keyboard.press('5');assert.equal(await unifiedPage.evaluate(()=>window.__media.time),900);
+    await unifiedPage.keyboard.press('m');assert.equal(await unifiedPage.locator('#nativePlayer').evaluate(v=>v.muted),true);
+    await unifiedPage.keyboard.press(']');assert.equal(await unifiedPage.locator('#nativePlayer').evaluate(v=>v.playbackRate),1.25);
+    const timeline=await unifiedPage.locator('#timelineBar').boundingBox();
+    await unifiedPage.mouse.move(timeline.x+timeline.width*.25,timeline.y+2);await unifiedPage.mouse.down();
+    await unifiedPage.mouse.move(timeline.x+timeline.width*.75,timeline.y+2);await unifiedPage.mouse.up();
+    assert(Math.abs(await unifiedPage.evaluate(()=>window.__media.time)-1350)<15,'Pointer drag seeks across timeline');
+    await unifiedPage.locator('#playerCanvas').focus();await unifiedPage.keyboard.press('Shift+/');
+    assert(await unifiedPage.locator('.controls-guide').isVisible(),'Shortcut help is discoverable');
+    await unifiedPage.keyboard.press('Escape');
+    await unifiedPage.locator('#dismissPlayerBtn').click();
+    await unifiedPage.locator('#openSearchBtn').click();await unifiedPage.locator('#overlaySearchInput').fill('التجربة');
+    await unifiedPage.waitForFunction(()=>document.querySelector('#searchGrid .catalogue-sources')?.children.length===2);
+    assert.equal(await unifiedPage.locator('#searchGrid [data-action="search-result"]').count(),1,'Unified search deduplicates matching series');
+    await unifiedPage.locator('#closeSearchOverlay').click();
+    failCinemana=true;delayCinemana=0;
+    await unifiedPage.locator('[data-source="krmzi"]').click();
+    await unifiedPage.waitForFunction(()=>document.getElementById('sourceStatus').textContent==='');
+    await unifiedPage.locator('[data-source="all"]').click();
+    await unifiedPage.waitForFunction(()=>document.getElementById('sourceStatus').textContent.includes('غير متاح'));
+    assert(await unifiedPage.locator('#seriesGrid [data-action="series"]').count(),'Unavailable Cinemana keeps Krmzi catalogue usable');
+    assert(await unifiedPage.locator('#offlineState').evaluate(el=>el.classList.contains('hidden')));
+    failCinemana=false;unifiedFixture=false;
+    await unifiedContext.close();
+    console.log('PASS unified catalogue: progressive results,deduplication,provider picker,search,fallback; keyboard,pointer,help');
     assert.deepEqual(failures, [], 'Browser runtime errors');
   } finally { await browser.close(); server.close(); }
 }

@@ -30,6 +30,7 @@
       if(!isTV()) return;
       const player=document.getElementById('mobilePlayer');
       const playerOpen=!player.classList.contains('hidden');
+      if(['MediaFastForward','MediaRewind','MediaTrackNext'].includes(event.key)&&playerOpen){event.preventDefault();document.getElementById(event.key==='MediaFastForward'?'centerForward':event.key==='MediaRewind'?'centerRewind':'autoNextPlayBtn').click();return;}
       if(event.key==='MediaPlayPause' && playerOpen){event.preventDefault();document.getElementById('centerPlay').click();return;}
       if(['BrowserBack','GoBack','Backspace'].includes(event.key) && !event.target.matches('input,textarea')){
         event.preventDefault();
@@ -47,7 +48,9 @@
       const sheet=document.getElementById('sheetBackdrop'),search=document.getElementById('searchOverlay');
       const root=!sheet.classList.contains('hidden')?sheet:!search.classList.contains('hidden')?search:playerOpen?player:document.getElementById('appFrame');
       if(root===player && document.getElementById('playerHudTop').classList.contains('hud-hidden')){
-        event.preventDefault();// Reveal controls without starting or pausing media.
+        event.preventDefault();
+        if(event.key==='ArrowLeft'||event.key==='ArrowRight'){window.OtiumControls?.seek(event.key==='ArrowLeft'?-10:10);return;}
+        // Up/down reveals controls without changing playback.
         for(const id of ['playerHudTop','playerHudBottom','hudCenter'])document.getElementById(id).classList.remove('hud-hidden');
         document.getElementById('centerPlay').focus({preventScroll:true});return;
       }
