@@ -10,3 +10,4 @@ android/build/
 android/app/build/
 
 artifacts/
+release-output/

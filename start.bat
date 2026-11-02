@@ -1,8 +1,8 @@
 @echo off
-title Krmzi Pro - Running
+title Otium Play - Running
 cd /d "%~dp0"
 echo ========================================================
-echo    KRMZI PRO - جاري تشغيل التطبيق بدون اعلانات
+echo    OTIUM PLAY - جاري تشغيل التطبيق (120FPS / OLED Dark)
 echo ========================================================
 echo.
 start http://localhost:3000

@@ -34,8 +34,8 @@ class MainActivity : AppCompatActivity() {
     private companion object {
         const val TAG = "KrmziMainActivity"
         const val APP_URL = "https://appassets.androidplatform.net/assets/public/index.html"
-        const val FALLBACK_VERSION_NAME = "1.4.0"
-        const val FALLBACK_VERSION_CODE = 13L
+        const val FALLBACK_VERSION_NAME = "1.5.0"
+        const val FALLBACK_VERSION_CODE = 14L
     }
 
     private lateinit var webView: WebView
@@ -82,6 +82,7 @@ class MainActivity : AppCompatActivity() {
                 try {
                     if (playing) {
                         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                        hideSystemBars(true)
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                             setPictureInPictureParams(
                                 PictureInPictureParams.Builder()
@@ -91,6 +92,7 @@ class MainActivity : AppCompatActivity() {
                         }
                     } else {
                         window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                        hideSystemBars(false)
                     }
                 } catch (e: Exception) {
                     Log.w(TAG, "Unable to update playback flags: ${e.message}")
@@ -103,8 +105,10 @@ class MainActivity : AppCompatActivity() {
             runOnUiThread {
                 try {
                     requestedOrientation = if (enable) {
+                        hideSystemBars(true)
                         ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
                     } else {
+                        hideSystemBars(false)
                         ActivityInfo.SCREEN_ORIENTATION_USER_PORTRAIT
                     }
                 } catch (e: Exception) {
@@ -287,6 +291,30 @@ class MainActivity : AppCompatActivity() {
                 WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED
             )
             window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
+
+            // Utilize full display under cutout/notch
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                window.attributes.layoutInDisplayCutoutMode =
+                    WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+            }
+
+            // Enable 120Hz / 90Hz High Refresh Rate on supported displays
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                val display = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    display
+                } else {
+                    @Suppress("DEPRECATION")
+                    windowManager.defaultDisplay
+                }
+                val modes = display?.supportedModes
+                val highestMode = modes?.maxByOrNull { it.refreshRate }
+                if (highestMode != null && highestMode.refreshRate > 60f) {
+                    val params = window.attributes
+                    params.preferredDisplayModeId = highestMode.modeId
+                    window.attributes = params
+                    Log.d(TAG, "Display set to high refresh rate: ${highestMode.refreshRate}Hz")
+                }
+            }
         } catch (e: Exception) {
             Log.w(TAG, "Window configuration failed: ${e.message}")
         }

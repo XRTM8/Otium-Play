@@ -1,6 +1,6 @@
 {
   "name": "otium-play",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "description": "Otium Play \u2014 multi-source movies and series",
   "main": "index.js",
   "scripts": {

@@ -12,7 +12,7 @@
  */
 
 (() => {
-  const APP_VERSION = '1.4.0';
+  const APP_VERSION = '1.5.0';
   const FAVS_KEY = 'krmzi_favs';
   const HIST_KEY = 'krmzi_hist';
   const PREF_QUALITY_KEY = 'krmzi_pref_quality';
@@ -1876,7 +1876,44 @@
       }
     });
 
-    toggleFullscreenBtn.addEventListener('click', () => {
+      const FIT_MODES = ['contain', 'cover', 'fill'];
+  const FIT_LABELS = {
+    contain: 'تناسب كامل (بدون قص أو مط)',
+    cover: 'ملء الشاشة (تكبير ناعم)',
+    fill: 'تمدد كامل'
+  };
+  const FIT_ICONS = {
+    contain: 'fa-expand',
+    cover: 'fa-maximize',
+    fill: 'fa-arrows-left-right-to-line'
+  };
+  let currentFitMode = readString('otium_fit_mode', 'contain');
+  if (!FIT_MODES.includes(currentFitMode)) currentFitMode = 'contain';
+
+  function applyFitMode(mode) {
+    currentFitMode = mode;
+    try { localStorage.setItem('otium_fit_mode', mode); } catch (_) {}
+    const stage = playerCanvas;
+    if (stage) {
+      stage.classList.remove('fit-contain', 'fit-cover', 'fit-fill');
+      stage.classList.add('fit-' + mode);
+    }
+    if (toggleAspectRatioBtn) {
+      toggleAspectRatioBtn.innerHTML = '<i class="fa-solid ' + (FIT_ICONS[mode] || 'fa-expand') + '"></i>';
+      toggleAspectRatioBtn.setAttribute('title', FIT_LABELS[mode] || 'أبعاد الفيديو');
+    }
+  }
+  applyFitMode(currentFitMode);
+
+  toggleAspectRatioBtn?.addEventListener('click', () => {
+    haptic();
+    const nextIndex = (FIT_MODES.indexOf(currentFitMode) + 1) % FIT_MODES.length;
+    const next = FIT_MODES[nextIndex];
+    applyFitMode(next);
+    showPill(FIT_ICONS[next], FIT_LABELS[next]);
+  });
+
+  toggleFullscreenBtn.addEventListener('click', () => {
       haptic();
       if (!document.fullscreenElement) {
         const request =
@@ -1925,7 +1962,7 @@
         arrowleft:()=>seekRelative(event.shiftKey?-30:-5),arrowright:()=>seekRelative(event.shiftKey?30:5),
         arrowup:()=>changeVolume(.05),arrowdown:()=>changeVolume(-.05),
         m:()=>{nativePlayer.muted=!nativePlayer.muted;showPill(nativePlayer.muted?'fa-volume-xmark':'fa-volume-high',nativePlayer.muted?'الصوت مكتوم':'الصوت مفعّل');},
-        f:()=>toggleFullscreenBtn.click(),p:()=>togglePipBtn.click(),c:()=>$('toggleSubtitlesBtn').click(),
+        a:()=>toggleAspectRatioBtn?.click(),f:()=>toggleFullscreenBtn.click(),p:()=>togglePipBtn.click(),c:()=>$('toggleSubtitlesBtn').click(),
         e:()=>$('openEpisodesSheetBtn').click(),q:openQualitySheet,s:openServersSheet,n:playNextEpisodeNow,
         '[':()=>changePlaybackSpeed(-.25),']':()=>changePlaybackSpeed(.25),
         escape:()=>{if(!document.fullscreenElement)closePlayer();},

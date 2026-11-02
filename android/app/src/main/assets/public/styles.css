@@ -1,16 +1,17 @@
 /* Otium Play — luminous violet, quiet surfaces, distinct device layouts. */
 :root {
-  --bg-core: #08090f;
-  --bg-surface: #11131d;
-  --bg-elevated: #1c2030;
-  --bg-glass: rgba(17,19,29,.88);
-  --bg-glass-dock: rgba(10,11,18,.92);
-  --text-main: #f7f5ff;
-  --text-sub: #aaaec3;
-  --text-dim: #8188a4;
-  --accent: #ab8cff;
-  --accent-soft: #ab8cff1c;
-  --accent-glow: rgba(148,110,255,.18);
+  --bg-core: #050608;
+  --bg-surface: #0c0e15;
+  --bg-elevated: #131722;
+  --bg-glass: rgba(12, 14, 21, 0.78);
+  --bg-glass-dock: rgba(7, 9, 14, 0.88);
+  --text-main: #ffffff;
+  --text-sub: #9ea4ba;
+  --text-dim: #656b82;
+  --accent: #ff2d55;
+  --accent-soft: rgba(255, 45, 85, 0.14);
+  --accent-glow: rgba(255, 45, 85, 0.32);
+  --accent-gradient: linear-gradient(135deg, #ff2d55 0%, #e11d48 50%, #8b5cf6 100%);
   --line-subtle: #ffffff12;
   --line-hover: #ffffff30;
   --radius-xs: 8px;
@@ -191,6 +192,26 @@ img { display: block; max-width: 100%; }
 
 .player-screen.video-playing .player-backdrop {
   opacity: 0;
+}
+
+
+.video-stage.fit-contain .video-elem {
+  object-fit: contain !important;
+  width: 100% !important;
+  height: 100% !important;
+  background: #000 !important;
+}
+.video-stage.fit-cover .video-elem {
+  object-fit: cover !important;
+  width: 100% !important;
+  height: 100% !important;
+  background: #000 !important;
+}
+.video-stage.fit-fill .video-elem {
+  object-fit: fill !important;
+  width: 100% !important;
+  height: 100% !important;
+  background: #000 !important;
 }
 
 .video-elem {
@@ -776,7 +797,7 @@ video::-webkit-media-controls-panel {
 }
 
 /* Drawer Server Switcher Bar */
-.drawer-server-bar {
+.drawer-server-bar { display: none !important;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1224,3 +1245,22 @@ html[data-display='tv'] .sheet-content:has(.series-provider-picker) .series-deta
 html[data-display='tv'] .sheet-content:has(.series-provider-picker) .sheet-episode-grid { grid-row:4/span 2 }
 html[data-display='tv'] .seek-step { font-size:15px;bottom:14px }
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}.spotlight-card:hover .spotlight-img{transform:none}}
+
+/* 120 FPS Fluidity & High Refresh Optimizations */
+.h-carousel, .media-grid {
+  contain: layout paint;
+  will-change: transform;
+}
+.ep-tile, .series-tile {
+  transform: translate3d(0, 0, 0);
+  backface-visibility: hidden;
+  transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.2s ease;
+}
+.ep-tile:hover, .series-tile:hover {
+  transform: translateY(-3px) scale(1.02);
+}
+.content-canvas {
+  scroll-behavior: smooth;
+  -webkit-overflow-scrolling: touch;
+  contain: content;
+}

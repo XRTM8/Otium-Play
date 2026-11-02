@@ -67,7 +67,7 @@ jobs:
           ACTUAL=$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' "$RUNNER_TEMP/krmzi-cert.txt")
           test "$ACTUAL" = "$EXPECTED_FINGERPRINT" || { echo "Signing key mismatch"; exit 1; }
           mkdir -p release-output
-          cp "$APK_FILE" release-output/krmzi-pro.apk
+          cp "$APK_FILE" release-output/otium-play.apk
 
       - name: Create GitHub Release & Upload APK
         uses: softprops/action-gh-release@v2
@@ -77,7 +77,7 @@ jobs:
           body: |
             # 📱 Otium Play (APK)
             
-            الإصدار الرسمي لتطبيق مشاهدة وبث المسلسلات التركية بدون أي إعلانات نهائياً وبجودة تصل إلى 1080p Full HD.
+            التحديث v1.5.0: واجهة فائقة البساطة، سلاسة 120 فريم، ألوان OLED سينمائية، ودعم تشغيل الفيديو بكامل حجم الشاشة بدون أي مط أو قص.
             
             ---
             
@@ -97,10 +97,10 @@ jobs:
             ---
             
             ### 📥 طريقة التثبيت على الهاتف:
-            1. قم بتحميل ملف **`krmzi-pro.apk`** أدناه.
+            1. قم بتحميل ملف **`otium-play.apk`** أدناه.
             2. افتح الملف على هاتفك الأندرويد واضغط **تثبيت (Install)**.
             3. استمتع بمشاهدة جميع المسلسلات التركية المفضلة بأعلى جودة وبدون أي إعلان.
-          files: release-output/krmzi-pro.apk
+          files: release-output/otium-play.apk
           draft: false
           prerelease: false
         env:
