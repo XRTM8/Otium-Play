@@ -28,6 +28,10 @@ import java.io.ByteArrayInputStream
 import java.net.HttpURLConnection
 import java.net.URL
 import org.json.JSONObject
+import android.provider.Settings
+import android.widget.Toast
+import androidx.core.content.FileProvider
+import java.io.File
 
 class MainActivity : AppCompatActivity() {
 
@@ -194,15 +198,56 @@ class MainActivity : AppCompatActivity() {
 
         @JavascriptInterface
         fun openDownloadUrl(downloadUrl: String) {
+            downloadAndInstall(downloadUrl)
+        }
+
+        @JavascriptInterface
+        fun downloadAndInstall(downloadUrl: String) {
             runOnUiThread {
                 try {
                     val uri = Uri.parse(downloadUrl)
                     if (uri.scheme != "https" && uri.scheme != "http") return@runOnUiThread
-                    startActivity(
-                        Intent(Intent.ACTION_VIEW, uri).apply {
+
+                    if (!downloadUrl.endsWith(".apk", ignoreCase = true)) {
+                        startActivity(Intent(Intent.ACTION_VIEW, uri).apply {
                             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        })
+                        return@runOnUiThread
+                    }
+
+                    Toast.makeText(this@MainActivity, "جارٍ تنزيل التحديث والتثبيت...", Toast.LENGTH_LONG).show()
+
+                    Thread {
+                        try {
+                            val conn = (URL(downloadUrl).openConnection() as HttpURLConnection).apply {
+                                connectTimeout = 15_000
+                                readTimeout = 60_000
+                                instanceFollowRedirects = true
+                                setRequestProperty("User-Agent", "OtiumPlay-Android")
+                            }
+                            if (conn.responseCode in 200..299) {
+                                val updateFile = File(cacheDir, "otium-update.apk")
+                                if (updateFile.exists()) updateFile.delete()
+                                conn.inputStream.use { input ->
+                                    updateFile.outputStream().use { output ->
+                                        input.copyTo(output)
+                                    }
+                                }
+                                runOnUiThread {
+                                    installApkFile(updateFile)
+                                }
+                            } else {
+                                runOnUiThread {
+                                    fallbackBrowserDownload(downloadUrl)
+                                }
+                            }
+                        } catch (e: Exception) {
+                            Log.e(TAG, "In-app download failed: ${e.message}", e)
+                            runOnUiThread {
+                                fallbackBrowserDownload(downloadUrl)
+                            }
                         }
-                    )
+                    }.start()
                 } catch (e: Exception) {
                     Log.e(TAG, "Failed to launch download URL: ${e.message}")
                 }
@@ -222,6 +267,41 @@ class MainActivity : AppCompatActivity() {
             if (l < c) return false
         }
         return false
+    }
+
+    private fun installApkFile(file: File) {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                if (!packageManager.canRequestPackageInstalls()) {
+                    val settingsIntent = Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES).apply {
+                        data = Uri.parse("package:$packageName")
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    startActivity(settingsIntent)
+                }
+            }
+            val apkUri = FileProvider.getUriForFile(this, "$packageName.fileprovider", file)
+            val installIntent = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(apkUri, "application/vnd.android.package-archive")
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            startActivity(installIntent)
+        } catch (e: Exception) {
+            Log.e(TAG, "Install failed: ${e.message}", e)
+            fallbackBrowserDownload(file.absolutePath)
+        }
+    }
+
+    private fun fallbackBrowserDownload(url: String) {
+        try {
+            val uri = Uri.parse(url)
+            startActivity(Intent(Intent.ACTION_VIEW, uri).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            })
+        } catch (e: Exception) {
+            Log.e(TAG, "Browser fallback failed: ${e.message}")
+        }
     }
 
     /* ------------------------------------------------------------------ */

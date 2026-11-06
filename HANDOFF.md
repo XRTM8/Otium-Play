@@ -87,13 +87,14 @@ No messages need to be sent to third parties. No other repository (especially Ot
 
 After the final edition/labels, clean history, search fixes and formatting:
 
-- **Final Rust tests passed:24/24** (16core+8UI).
-- **Final actual-WASM browser suite passed in full**, including all source-switch/HLS/history/search/TV regressions. No active test/build process remains.
-- Final WASM check/Clippy passed. UI was rebuilt and synchronized.
-- **Final Android assembleRelease + lintRelease passed.** APK contains all4Rust ABI libraries and the exact final public WASM, JS bindings, CSS and index; obsolete app.js is absent.
-- Version verified:2.0.0/code15/applicationIdcom.krmzi.app. Certificate matches the pinned retained key.
-- Final APK SHA256: `f1efc9dedad4ffc651d4a22835e6f66a7a45edcee59d37944ff12e7b0baa16bf`.
-- Local reviewable APK: `release-output/otium-play-2.0.0.apk` (ignored; rebuilt from final sources). Original build output is also present. A different machine must rebuild; this ignored APK is not in Git.
+- In-app update downloader and installer integrated: `android/app/src/main/res/xml/file_paths.xml`, `REQUEST_INSTALL_PACKAGES` and `FileProvider` in Android manifest, background direct APK downloader and installer intent in `MainActivity.kt`, and quiet auto-check + manual check in `rust/otium-ui/src/app.rs`.
+- **Final Rust tests passed: 24/24** (16 core + 8 UI).
+- **Final actual-WASM browser suite passed in full: 14/14 suites**, plus PWA offline test.
+- Final WASM check passed. UI was rebuilt and synchronized into `public/wasm` and Android assets.
+- **Final Android assembleRelease passed.** APK contains all 4 Rust ABI libraries (`arm64-v8a`, `armeabi-v7a`, `x86`, `x86_64`) and the exact final public WASM, JS bindings, CSS and index.
+- Version verified: 2.0.0 / code 15 / applicationId `com.krmzi.app`. Certificate matches the pinned retained key (`2c6d74a5251577fcdfd8a9df651d52fb2641ff4ef1be6686c8266abed0a0cbf3`).
+- Final APK SHA256: `e899dac32eccfcfa17ed744b9803588306f79d138b71acfb119bb19ca7d1be48`.
+- Local reviewable APK: `release-output/otium-play.apk` and `release-output/otium-play-2.0.0.apk`.
 - Offline PWA test passed; live upstream/video smoke passed with192series/5pages,24movies and a decoded advancing video. Physical-device/FPS checks remain unperformed.
 - Steps1–3 in “Remaining before publishing” are now complete. Review this checkpoint commit/status, then the remaining external action is publishing the verified v2.0.0 release when continuing the authorized release work. **No v2.0.0 release or tag has been published yet.**
 

@@ -1084,9 +1084,11 @@ fn remote_focus(event: &KeyboardEvent) {
         next.scroll_into_view_with_bool(false);
     }
 }
-fn check_updates() {
-    text("checkUpdateBtnText", "جاري الفحص…");
-    spawn_local(async {
+fn check_updates(manual: bool) {
+    if manual {
+        text("checkUpdateBtnText", "جاري الفحص…");
+    }
+    spawn_local(async move {
         let result = api::request_json(
             "https://api.github.com/repos/XRTM8/Otium-Play/releases/latest",
             None,
@@ -1101,23 +1103,47 @@ fn check_updates() {
                     .map(|n| n.parse::<u32>().unwrap_or(0))
                     .collect::<Vec<_>>();
                 if remote <= vec![2, 0, 0] {
-                    notify("أنت تستخدم آخر إصدار");
+                    if manual {
+                        notify("أنت تستخدم آخر إصدار");
+                    }
                 } else if let Some(url) = data["assets"]
                     .as_array()
                     .and_then(|rows| rows.iter().find(|v| s(v, "name").ends_with(".apk")))
                     .map(|v| s(v, "browser_download_url"))
                 {
-                    open_sheet("تحديث التطبيق",&format!("<p>{}</p><p class=\"changelog-container\">{}</p><button class=\"load-more-btn\" data-action=\"download\" data-url=\"{}\">تنزيل التحديث</button>",esc(&version),esc(&s(&data,"body")),esc(&url)));
+                    open_sheet(
+                        "تحديث التطبيق",
+                        &format!(
+                            "<p>{}</p><p class=\"changelog-container\">{}</p><button class=\"load-more-btn\" data-action=\"download\" data-url=\"{}\">تنزيل وتثبيت التحديث الآن</button>",
+                            esc(&version),
+                            esc(&s(&data, "body")),
+                            esc(&url)
+                        ),
+                    );
                 }
             }
-            _ => notify("تعذّر فحص التحديث الآن"),
+            _ => {
+                if manual {
+                    notify("تعذّر فحص التحديث الآن");
+                }
+            }
         }
-        text("checkUpdateBtnText", "بحث عن تحديث");
+        if manual {
+            text("checkUpdateBtnText", "بحث عن تحديث");
+        }
     });
+}
+
+fn check_updates_manual() {
+    check_updates(true);
+}
+
+fn check_updates_auto() {
+    check_updates(false);
 }
 pub fn init() {
     if window().location().hostname().unwrap_or_default() != "appassets.androidplatform.net" {
-        spawn_local(async {
+        spawn_local(async move {
             let _ = wasm_bindgen_futures::JsFuture::from(
                 window().navigator().service_worker().register("sw.js"),
             )
@@ -1150,7 +1176,14 @@ pub fn init() {
             close_sheet();
         }
     });
-    on("manualCheckUpdateBtn", "click", |_| check_updates());
+    on("manualCheckUpdateBtn", "click", |_| check_updates_manual());
+    spawn_local(async move {
+        let promise = js_sys::Promise::new(&mut |resolve, _| {
+            let _ = window().set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, 4000);
+        });
+        let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
+        check_updates_auto();
+    });
     on("clearHistoryBtn", "click", |_| {
         STATE.with(|state| state.borrow_mut().history.clear());
         store("krmzi_hist", "[]");
