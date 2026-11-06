@@ -1,208 +1,37 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="ar" dir="rtl">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-  <title>Otium Play</title>
-  
-  <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <meta name="theme-color" content="#08090f">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#090c10">
   <meta name="color-scheme" content="dark">
   <meta name="referrer" content="no-referrer">
+  <title>Otium Play</title>
   <link rel="manifest" href="manifest.json">
-  <link rel="icon" type="image/png" href="icons/icon-192.png">
+  <link rel="icon" href="icons/icon-192.png">
   <link rel="apple-touch-icon" href="icons/icon-192.png">
-
-  <!-- Self-hosted typography & icons: zero external requests, works offline -->
   <link rel="preload" href="fonts/tajawal-5.woff2" as="font" type="font/woff2" crossorigin>
-  <link rel="preload" href="fonts/tajawal-7.woff2" as="font" type="font/woff2" crossorigin>
-  <link rel="preload" href="fonts/tajawal-9.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="fonts/tajawal.css">
   <link rel="stylesheet" href="vendor/fontawesome/css/all.min.css">
-
-  <link rel="stylesheet" href="styles.css?v=1.5.0">
+  <link rel="stylesheet" href="styles.css?v=2.0.0">
 </head>
 <body>
-
-  <!-- Mobile Viewport Frame -->
-  <div class="app-frame" id="appFrame">
-
-    <!-- Minimal Header -->
-    <header class="top-nav">
-      <button class="nav-brand" id="brandBtn" aria-label="Otium Play — الرئيسية">
-        <span class="brand-mark" aria-hidden="true"><i class="fa-solid fa-play"></i></span><span class="brand-text" dir="ltr">otium<span>play</span></span>
-      </button>
-      <button class="nav-icon-btn" id="openSearchBtn" aria-label="بحث">
-        <i class="fa-solid fa-magnifying-glass"></i>
-      </button>
-    </header>
-
-    <!-- Scrollable Content Canvas -->
-    <main class="content-canvas" id="contentCanvas">
-
-      <!-- Pull to Refresh Spinner -->
-      <div class="pull-refresh-box" id="pullRefreshIndicator">
-        <div class="spinner-ring"></div>
-      </div>
-
-      <!-- Offline / Error State -->
-      <div class="offline-card hidden" id="offlineState">
-        <div class="offline-icon"><i class="fa-solid fa-wifi"></i></div>
-        <h3>تعذر الاتصال بالخادم</h3>
-        <p>يرجى التأكد من اتصال الإنترنت ثم المحاولة مجدداً</p>
-        <button class="btn-retry" id="retryBtn">
-          <i class="fa-solid fa-rotate-right"></i>
-          <span>إعادة المحاولة</span>
-        </button>
-      </div>
-
-      <section class="source-switcher" aria-label="مصدر المشاهدة">
-        <div class="source-label"><span>المكتبة</span><small id="sourceStatus" role="status"></small></div>
-        <div class="source-options">
-          <button class="source-option active" data-source="all" aria-pressed="true">كل المصادر</button>
-          <button class="source-option" data-source="krmzi" aria-pressed="false">قرمزي</button>
-          <button class="source-option" data-source="cinemana" aria-pressed="false">سينمانا</button>
-        </div>
-        <p class="source-network-note hidden" id="sourceNetworkNote">تعذّر الوصول إلى سينمانا. جرّب قرمزي أو أعد المحاولة.</p>
-      </section>
-
-      <!-- Hero Cinematic Spotlight -->
-      <section class="spotlight-wrap" id="heroSpotlight">
-        <div class="spotlight-card" id="spotlightCard">
-          <div class="spotlight-img" id="spotlightMedia"></div>
-          <div class="spotlight-fade"></div>
-          <div class="spotlight-meta">
-            <span class="spotlight-tag" id="spotlightBadgeText">الحلقة الأحدث</span>
-            <h1 class="spotlight-heading" id="spotlightTitle">جاري التحميل</h1>
-            <p class="spotlight-context" id="spotlightContext"></p>
-            <div class="resume-progress-wrap hidden" id="spotlightProgressWrap">
-              <div class="resume-progress-track">
-                <div class="resume-progress-bar" id="spotlightProgressBar"></div>
-              </div>
-              <span class="resume-time-text" id="spotlightProgressText"></span>
-            </div>
-            <div class="spotlight-btn-row">
-              <button class="btn-play-hero" id="spotlightPlayBtn">
-                <i class="fa-solid fa-play"></i>
-                <span id="spotlightPlayBtnText">شاهد الآن</span>
-              </button>
-              <button class="btn-icon-hero" id="spotlightSeriesBtn" aria-label="الحلقات">
-                <i class="fa-solid fa-list"></i><span>التفاصيل</span>
-              </button>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <!-- Continue Watching (History) -->
-      <section class="feed-section hidden" id="historySection">
-        <div class="section-headline">
-          <h3>تابع المشاهدة</h3>
-          <button class="headline-link" id="clearHistoryBtn">مسح</button>
-        </div>
-        <div class="h-carousel" id="historyCarousel"></div>
-      </section>
-
-      <!-- Latest Episodes Section -->
-      <section class="feed-section" id="episodesSection">
-        <div class="section-headline">
-          <h3>أحدث الحلقات</h3>
-        </div>
-        <div class="h-carousel" id="episodesCarousel"></div>
-      </section>
-
-      <section class="feed-section hidden" id="moviesSection"><div class="section-headline"><h3>أفلام من سينمانا</h3></div><div class="h-carousel" id="moviesCarousel"></div></section>
-
-      <div class="genre-chips-wrap" id="genreChipsWrap" aria-label="ترتيب المكتبة">
-        <span class="sort-label">ترتيب حسب</span>
-        <button class="genre-pill active" data-filter="all" aria-pressed="true">الأحدث</button>
-        <button class="genre-pill" data-filter="az" aria-pressed="false">الاسم</button>
-        <button class="genre-pill" data-filter="year" aria-pressed="false">السنة</button>
-      </div>
-
-      <!-- Series Grid Section -->
-      <section class="feed-section" id="seriesSection">
-        <div class="section-headline">
-          <h3>المسلسلات</h3>
-          <span class="headline-muted" id="seriesCountSub">المكتبة</span>
-        </div>
-        <div class="media-grid" id="seriesGrid"></div>
-      </section>
-
-      <!-- Library View (Favorites & History) -->
-      <section class="feed-section library-wrap hidden" id="libraryView">
-        <div class="library-header-row">
-          <h2>مكتبتي</h2>
-          <div class="segmented-control">
-            <button class="segment-btn active" data-subtab="favs">المفضلة</button>
-            <button class="segment-btn" data-subtab="hist">السجل</button>
-          </div>
-        </div>
-        <div class="media-grid" id="libraryGrid"></div>
-
-        <div class="display-preference"><div><h3>طريقة العرض</h3><p>تتكيف الواجهة مع جهازك. اختر التلفزيون عند استخدام ريموت.</p></div><select id="displayModeSelect" aria-label="طريقة العرض"><option value="auto">تلقائي</option><option value="tv">تلفزيون</option></select></div>
-        <button class="controls-help-link" id="controlsHelpBtn"><i class="fa-regular fa-keyboard"></i><span>اختصارات التحكم</span><span class="keycap">?</span></button>
-        <!-- App Info & System Update Card -->
-        <div class="app-version-card" id="appVersionCard">
-          <div class="version-meta">
-            <div class="version-icon-box">
-              <i class="fa-solid fa-code-branch"></i>
-            </div>
-            <div class="version-text">
-              <span class="v-label">إصدار التطبيق</span>
-              <span class="v-val" id="installedVersionText">v1.5.0</span>
-            </div>
-          </div>
-          <button class="check-update-btn" id="manualCheckUpdateBtn">
-            <i class="fa-solid fa-arrows-rotate" id="checkUpdateIcon"></i>
-            <span id="checkUpdateBtnText">بحث عن تحديث</span>
-          </button>
-        </div>
-      </section>
-
-    </main>
-
-    <!-- Floating Frosted Bottom Dock -->
-    <nav class="bottom-dock" aria-label="التنقل">
-      <div class="dock-bar">
-        <button class="dock-btn active" data-tab="home" id="tabHome">
-          <i class="fa-solid fa-house"></i>
-          <span>الرئيسية</span>
-        </button>
-        <button class="dock-btn" data-tab="series" id="tabSeries">
-          <i class="fa-solid fa-tv"></i>
-          <span>المسلسلات</span>
-        </button>
-        <button class="dock-btn" data-tab="search" id="tabSearch">
-          <i class="fa-solid fa-magnifying-glass"></i>
-          <span>بحث</span>
-        </button>
-        <button class="dock-btn" data-tab="library" id="tabLibrary">
-          <i class="fa-solid fa-bookmark"></i>
-          <span>مكتبتي</span>
-        </button>
-      </div>
-    </nav>
-
-    <!-- Minimal Search View -->
-    <div class="search-modal hidden" id="searchOverlay">
-      <div class="search-topbar">
-        <button class="btn-back" id="closeSearchOverlay"><i class="fa-solid fa-chevron-right"></i></button>
-        <div class="search-bar-wrap">
-          <i class="fa-solid fa-magnifying-glass"></i>
-          <input type="text" id="overlaySearchInput" placeholder="فيلم، مسلسل…" autocomplete="off" spellcheck="false" enterkeyhint="search">
-          <button class="search-clear hidden" id="clearSearchInput"><i class="fa-solid fa-xmark"></i></button>
-        </div>
-      </div>
-      <div class="search-scroll-area">
-        <div class="search-zero-state" id="searchInitialState">
-          <i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i><h3>عن ماذا تبحث؟</h3><p>اكتب اسم فيلم أو مسلسل.</p>
-        </div>
-        <p class="search-source-status" id="searchSourceStatus" role="status"></p><div class="media-grid hidden" id="searchGrid"></div>
-      </div>
-    </div>
-
+<div class="app-frame" id="appFrame">
+  <header class="top-nav">
+    <button class="nav-brand" id="brandBtn" aria-label="Otium Play، المسلسلات"><span class="brand-mark"><i class="fa-solid fa-play"></i></span><span class="brand-text">otium<span>play</span></span></button>
+    <div class="nav-tools"><button class="nav-icon-btn" id="openSearchBtn" aria-label="بحث"><i class="fa-solid fa-magnifying-glass"></i></button><button class="nav-icon-btn" id="openLibraryBtn" aria-label="مكتبتي"><i class="fa-regular fa-bookmark"></i></button></div>
+  </header>
+  <nav class="catalogue-tabs" aria-label="المكتبة"><button id="tabSeries" class="active" aria-selected="true">المسلسلات</button><button id="tabMovies" aria-selected="false">الأفلام</button></nav>
+  <main class="content-canvas" id="contentCanvas">
+    <section class="source-switcher" id="sourceSwitcher" aria-label="المصادر">
+      <span class="source-label">المصادر</span><div class="source-options"><button class="source-option active" data-source="all" aria-pressed="true">الكل</button><button class="source-option" data-source="krmzi" aria-pressed="false">قرمزي</button><button class="source-option" data-source="cinemana" aria-pressed="false">سينمانا</button></div>
+    </section>
+    <p id="bootStatus" class="boot-status" role="status">جاري تشغيل Otium Play…</p>
+    <section class="feed-section" id="seriesSection"><div class="section-headline"><h1 id="catalogueTitle">المسلسلات</h1><span id="seriesCountSub" class="headline-muted"></span></div><div class="media-grid" id="seriesGrid"></div><div class="catalogue-pagination"><p id="cataloguePageStatus" role="status"></p><button class="load-more-btn hidden" id="loadMoreSeriesBtn">عرض المزيد</button></div></section>
+    <section class="offline-card hidden" id="offlineState"><h3>تعذّر الوصول إلى المصادر</h3><p>تحقّق من الاتصال وأعد المحاولة. توفّر سينمانا يعتمد على مزوّد الإنترنت.</p><button class="btn-retry" id="retryBtn">إعادة المحاولة</button></section>
+    <section class="feed-section library-wrap hidden" id="libraryView"><div class="library-header-row"><h2>مكتبتي</h2><button class="headline-link" id="clearHistoryBtn">مسح السجل</button></div><div class="segmented-control"><button class="segment-btn" data-library="hist">سجل المشاهدة</button><button class="segment-btn" data-library="favs">المفضلة</button></div><div class="media-grid" id="libraryGrid"></div><div class="display-preference"><div><h3>طريقة العرض</h3><p>للهاتف والكمبيوتر. اختر التلفزيون عند استخدام الريموت.</p></div><select id="displayModeSelect" aria-label="طريقة العرض"><option value="auto">تلقائي</option><option value="tv">تلفزيون</option></select></div><button class="controls-help-link" id="controlsHelpBtn"><i class="fa-regular fa-keyboard"></i><span>اختصارات التحكم</span><kbd>?</kbd></button><div class="app-version-card"><div class="version-text"><span class="v-label">Otium Play</span><span class="v-val" id="installedVersionText">v2.0.0</span></div><button class="check-update-btn" id="manualCheckUpdateBtn"><i class="fa-solid fa-arrows-rotate"></i><span id="checkUpdateBtnText">بحث عن تحديث</span></button></div></section>
+  </main>
+  <section class="search-modal hidden" id="searchOverlay" aria-label="البحث"><div class="search-topbar"><button class="btn-back" id="closeSearchOverlay" aria-label="رجوع"><i class="fa-solid fa-chevron-right"></i></button><div class="search-bar-wrap"><i class="fa-solid fa-magnifying-glass"></i><input type="search" id="overlaySearchInput" placeholder="اسم فيلم أو مسلسل" autocomplete="off" spellcheck="false" enterkeyhint="search" aria-label="ابحث في المصادر"></div></div><div class="search-scroll-area"><div class="search-zero-state" id="searchInitialState"><h3>ابحث عن عمل</h3><p>النتائج تجمع المصادر المتاحة.</p></div><p class="search-source-status" id="searchSourceStatus" role="status"></p><div class="media-grid hidden" id="searchGrid"></div><div class="catalogue-pagination"><button class="load-more-btn hidden" id="loadMoreSearchBtn">المزيد من النتائج</button></div></div></section>
     <!-- Minimal Video Player Interface -->
     <div class="player-screen hidden" id="mobilePlayer">
       
@@ -346,36 +175,13 @@
       </div>
     </div>
 
-    <!-- In-App Update Modal Sheet -->
-    <div class="sheet-scrim hidden" id="updateModalScrim">
-      <div class="sheet-panel update-panel" id="updateSheet">
-        <div class="sheet-grabber"></div>
-        <div class="update-sheet-body">
-          <div class="update-icon-glow">
-            <i class="fa-solid fa-cloud-arrow-down"></i>
-          </div>
-          <h3 id="updateModalTitle">تحديث جديد متوفر!</h3>
-          <span class="update-tag" id="updateModalVersion">الإصدار v1.0.4</span>
-          <div class="changelog-container" id="updateChangelog"></div>
-          <div class="update-actions">
-            <button class="update-primary-btn" id="confirmUpdateBtn">
-              <i class="fa-solid fa-download"></i>
-              <span>تحديث الآن (تحميل APK)</span>
-            </button>
-            <button class="update-later-btn" id="dismissUpdateBtn">
-              <span>تذكيري لاحقاً</span>
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
 
-  </div>
-
-  <script src="vendor/hls/hls.min.js" defer></script>
-  <script src="providers/cinemana.js" defer></script>
-  <script src="catalogue.js" defer></script>
-  <script src="device-ui.js" defer></script>
-  <script src="app.js?v=1.5.0" defer></script>
+  <p class="app-toast hidden" id="appToast" role="status"></p>
+</div>
+<script src="vendor/hls/hls.min.js" defer></script>
+<script type="module">
+import init from './wasm/otium_ui.js';
+init().catch(() => { document.getElementById('bootStatus').textContent = 'تعذّر تشغيل التطبيق. أعد فتحه أو تحديث المتصفح.'; });
+</script>
 </body>
 </html>

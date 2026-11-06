@@ -1,10 +1,6 @@
 @echo off
-title Otium Play - Running
+title Otium Play
 cd /d "%~dp0"
-echo ========================================================
-echo    OTIUM PLAY - جاري تشغيل التطبيق (120FPS / OLED Dark)
-echo ========================================================
-echo.
-start http://localhost:3000
-node server.js
+echo Otium Play - http://localhost:3000
+cargo run --manifest-path rust/otium-core/Cargo.toml --locked --release
 pause

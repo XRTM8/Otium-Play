@@ -11,3 +11,5 @@ android/app/build/
 
 artifacts/
 release-output/
+rust/*/target/
+android/app/src/main/jniLibs/

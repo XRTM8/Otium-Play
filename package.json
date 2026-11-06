@@ -1,21 +1,18 @@
 {
   "name": "otium-play",
-  "version": "1.5.0",
-  "description": "Otium Play \u2014 multi-source movies and series",
-  "main": "index.js",
+  "version": "2.0.0",
+  "description": "Otium Play — Rust and WebAssembly streaming client",
   "scripts": {
-    "start": "node server.js",
-    "test": "node --test tests/stream-resolution.test.js tests/media-proxy.test.js tests/cinemana.test.js tests/catalogue.test.js",
-    "test:ui": "node tests/frontend-player.test.cjs"
+    "start": "cargo run --manifest-path rust/otium-core/Cargo.toml --locked",
+    "build:ui": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-rust-ui.ps1",
+    "test": "cargo test --manifest-path rust/otium-core/Cargo.toml --locked && cargo test --manifest-path rust/otium-ui/Cargo.toml --locked",
+    "test:ui": "node tests/rust-ui.test.cjs"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
-    "compression": "^1.8.2",
-    "cors": "^2.8.6",
-    "express": "^5.3.0",
     "hls.js": "1.7.4"
   }
 }

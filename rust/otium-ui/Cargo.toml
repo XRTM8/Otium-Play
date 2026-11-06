@@ -1,0 +1,34 @@
+[package]
+name = "otium-ui"
+version = "2.0.0"
+edition = "2021"
+license = "ISC"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+wasm-bindgen = "=0.2.130"
+wasm-bindgen-futures = "0.4.80"
+js-sys = "0.3.107"
+serde_json = "1"
+serde = { version = "1", features = ["derive"] }
+unicode-normalization = "0.1"
+base64 = "0.22.1"
+futures-util = "0.3"
+gloo-timers = { version = "0.3", features = ["futures"] }
+web-sys = { version = "0.3.107", features = [
+  "Window", "Document", "Element", "HtmlElement", "Node", "NodeList", "DomTokenList", "DomRect", "CssStyleDeclaration",
+  "Event", "EventTarget", "KeyboardEvent", "PointerEvent", "MouseEvent", "TouchEvent", "TouchList", "Touch",
+  "HtmlVideoElement", "HtmlMediaElement", "HtmlIFrameElement", "HtmlTrackElement", "TextTrackList", "TextTrack", "TextTrackMode", "TimeRanges", "MediaError",
+  "HtmlInputElement", "HtmlSelectElement", "HtmlButtonElement", "HtmlImageElement", "HtmlCollection",
+  "Request", "RequestInit", "RequestCache", "Response", "Headers", "AbortController", "AbortSignal", "UrlSearchParams", "Url",
+  "Storage", "Location", "Navigator", "ServiceWorkerContainer", "MediaQueryList", "Performance", "ScrollToOptions", "ScrollBehavior", "FocusOptions", "console"
+] }
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = "debuginfo"

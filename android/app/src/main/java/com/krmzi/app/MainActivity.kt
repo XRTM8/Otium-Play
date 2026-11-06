@@ -34,8 +34,8 @@ class MainActivity : AppCompatActivity() {
     private companion object {
         const val TAG = "KrmziMainActivity"
         const val APP_URL = "https://appassets.androidplatform.net/assets/public/index.html"
-        const val FALLBACK_VERSION_NAME = "1.5.0"
-        const val FALLBACK_VERSION_CODE = 14L
+        const val FALLBACK_VERSION_NAME = "2.0.0"
+        const val FALLBACK_VERSION_CODE = 15L
     }
 
     private lateinit var webView: WebView
@@ -45,6 +45,7 @@ class MainActivity : AppCompatActivity() {
     private var customViewCallback: WebChromeClient.CustomViewCallback? = null
     private var isVideoPlaying = false
     private var isDestroyed = false
+    private var appChromeClient: WebChromeClient? = null
 
     /* ------------------------------------------------------------------ */
     /*  JavaScript bridge                                                  */
@@ -53,27 +54,6 @@ class MainActivity : AppCompatActivity() {
     inner class KrmziBridge {
         @JavascriptInterface
         fun isTelevision(): Boolean = (resources.configuration.uiMode and Configuration.UI_MODE_TYPE_MASK) == Configuration.UI_MODE_TYPE_TELEVISION
-
-        @JavascriptInterface
-        fun getHome(page: Int): String = KrmziScraper.getHome(page)
-
-        @JavascriptInterface
-        fun getEpisodes(page: Int): String = KrmziScraper.getEpisodes(page)
-
-        @JavascriptInterface
-        fun getSeries(page: Int): String = KrmziScraper.getSeries(page)
-
-        @JavascriptInterface
-        fun getSeriesDetail(url: String): String = KrmziScraper.getSeriesDetail(url)
-
-        @JavascriptInterface
-        fun getEpisodeDetail(url: String): String = KrmziScraper.getEpisodeDetail(url)
-
-        @JavascriptInterface
-        fun search(query: String): String = KrmziScraper.getSearch(query)
-
-        @JavascriptInterface
-        fun getHealth(): String = KrmziScraper.getHealth()
 
         @JavascriptInterface
         fun setVideoPlaying(playing: Boolean) {
@@ -109,7 +89,7 @@ class MainActivity : AppCompatActivity() {
                         ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
                     } else {
                         hideSystemBars(false)
-                        ActivityInfo.SCREEN_ORIENTATION_USER_PORTRAIT
+                        if ((resources.configuration.uiMode and Configuration.UI_MODE_TYPE_MASK) == Configuration.UI_MODE_TYPE_TELEVISION) ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE else ActivityInfo.SCREEN_ORIENTATION_USER_PORTRAIT
                     }
                 } catch (e: Exception) {
                     Log.e(TAG, "Orientation error: ${e.message}")
@@ -251,7 +231,6 @@ class MainActivity : AppCompatActivity() {
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        KrmziScraper.init(applicationContext)
 
         if ((resources.configuration.uiMode and Configuration.UI_MODE_TYPE_MASK) == Configuration.UI_MODE_TYPE_TELEVISION) {
             requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
@@ -307,7 +286,8 @@ class MainActivity : AppCompatActivity() {
                     windowManager.defaultDisplay
                 }
                 val modes = display?.supportedModes
-                val highestMode = modes?.maxByOrNull { it.refreshRate }
+                val currentMode = display?.mode
+                val highestMode = modes?.filter { it.physicalWidth == currentMode?.physicalWidth && it.physicalHeight == currentMode.physicalHeight && it.refreshRate <= 120.5f }?.maxByOrNull { it.refreshRate }
                 if (highestMode != null && highestMode.refreshRate > 60f) {
                     val params = window.attributes
                     params.preferredDisplayModeId = highestMode.modeId
@@ -381,7 +361,7 @@ class MainActivity : AppCompatActivity() {
 
         webView.addJavascriptInterface(KrmziBridge(), "KrmziBridge")
 
-        webView.webChromeClient = object : WebChromeClient() {
+        val chromeClient = object : WebChromeClient() {
             override fun onCreateWindow(
                 view: WebView?,
                 isDialog: Boolean,
@@ -434,6 +414,8 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+        webView.webChromeClient = chromeClient
+        appChromeClient = chromeClient
         webView.webViewClient = object : WebViewClient() {
             override fun shouldInterceptRequest(
                 view: WebView?,
@@ -446,11 +428,15 @@ class MainActivity : AppCompatActivity() {
                     host == "localhost" ||
                     host == "127.0.0.1"
 
+                if (isLocalApp && path == "/assets/public/wasm/otium_ui_bg.wasm") {
+                    return WebResourceResponse("application/wasm", null, assets.open("public/wasm/otium_ui_bg.wasm"))
+                }
+
                 if (isLocalApp && path == "/api/cinemana/subtitle") {
-                    return KrmziScraper.cinemanaSubtitle(requestUri.getQueryParameter("url") ?: "")
+                    return RustApi.response(requestUri.toString())
                 }
                 if (isLocalApp && path == "/api/media") {
-                    return KrmziScraper.mediaResponse(requestUri.getQueryParameter("url") ?: "", request.requestHeaders["Range"] ?: request.requestHeaders["range"])
+                    return RustApi.response(requestUri.toString(), request.requestHeaders["Range"] ?: request.requestHeaders["range"] ?: "")
                 }
 
                 if (isLocalApp && path.startsWith("/api/")) {
@@ -458,7 +444,7 @@ class MainActivity : AppCompatActivity() {
                         return corsResponse(204, "No Content", "")
                     }
                     return try {
-                        val json = if (path == "/api/cinemana") KrmziScraper.cinemana(requestUri.getQueryParameter("path") ?: "") else KrmziScraper.handle(requestUri.toString())
+                        val json = RustApi.request(requestUri.toString())
                         WebResourceResponse(
                             "application/json",
                             "UTF-8",
@@ -543,7 +529,8 @@ class MainActivity : AppCompatActivity() {
                 view: WebView?,
                 detail: RenderProcessGoneDetail?
             ): Boolean {
-                Log.e(TAG, "WebView renderer gone (crashed=${detail?.didCrash()})")
+                val crashed = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) detail?.didCrash() else null
+                Log.e(TAG, "WebView renderer gone (crashed=$crashed)")
                 if (!isDestroyed) recreateWebView()
                 return true
             }
@@ -596,7 +583,7 @@ class MainActivity : AppCompatActivity() {
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
                 if (customView != null) {
-                    webView.webChromeClient?.onHideCustomView()
+                    appChromeClient?.onHideCustomView()
                     return
                 }
                 if (!::webView.isInitialized || isDestroyed) {
@@ -657,7 +644,7 @@ class MainActivity : AppCompatActivity() {
         isInPictureInPictureMode: Boolean,
         newConfig: Configuration
     ) {
-        super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
         if (!::webView.isInitialized || isDestroyed) return
         val script = if (isInPictureInPictureMode) {
             "document.getElementById('playerHudTop')?.classList.add('hud-hidden');" +
@@ -671,7 +658,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
-        if (hasFocus) hideSystemBars(false)
+        if (hasFocus) hideSystemBars(isVideoPlaying || customView != null)
     }
 
     private fun hideSystemBars(fullscreen: Boolean) {
@@ -690,7 +677,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onPause() {
-        if (::webView.isInitialized) {
+        val inPip = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && isInPictureInPictureMode
+        if (::webView.isInitialized && !inPip) {
             webView.onPause()
             webView.pauseTimers()
         }
@@ -712,14 +700,14 @@ class MainActivity : AppCompatActivity() {
     override fun onLowMemory() {
         super.onLowMemory()
         if (::webView.isInitialized) webView.clearCache(false)
-        KrmziScraper.trimMemory()
+        RustApi.trimMemory()
     }
 
     override fun onTrimMemory(level: Int) {
         super.onTrimMemory(level)
         if (level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW) {
             if (::webView.isInitialized) webView.clearCache(false)
-            KrmziScraper.trimMemory()
+            RustApi.trimMemory()
         }
     }
 
@@ -737,7 +725,7 @@ class MainActivity : AppCompatActivity() {
         } catch (e: Exception) {
             Log.w(TAG, "WebView cleanup failed: ${e.message}")
         }
-        KrmziScraper.clearMemoryCache()
+        RustApi.clearMemoryCache()
         super.onDestroy()
     }
 }

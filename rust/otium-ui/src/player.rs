@@ -1,0 +1,2168 @@
+//! The playback session is independent from catalogue requests and sheets.
+//! A replacement source is resolved before media is touched; failed replacement
+//! attempts restore the last working episode and playback settings.
+use crate::{api, app, catalogue, dom::*};
+use gloo_timers::callback::{Interval, Timeout};
+use js_sys::{Array, Function, Object, Promise, Reflect};
+use serde_json::{json, Value};
+use std::cell::RefCell;
+use wasm_bindgen::{closure::Closure, JsCast, JsValue};
+use wasm_bindgen_futures::{spawn_local, JsFuture};
+use web_sys::{
+    AbortController, Element, Event, HtmlElement, HtmlInputElement, HtmlVideoElement,
+    KeyboardEvent, PointerEvent, TextTrackMode,
+};
+
+#[derive(Clone, Debug)]
+pub struct PlaybackSnapshot {
+    pub time: f64,
+    pub paused: bool,
+    pub rate: f64,
+    pub volume: f64,
+    pub muted: bool,
+}
+impl Default for PlaybackSnapshot {
+    fn default() -> Self {
+        Self {
+            time: 0.,
+            paused: false,
+            rate: 1.,
+            volume: 1.,
+            muted: false,
+        }
+    }
+}
+#[derive(Clone)]
+struct Restore {
+    episode: Value,
+    series: Value,
+    episodes: Vec<Value>,
+    settings: PlaybackSnapshot,
+    stream_index: usize,
+    embedded: Option<Value>,
+}
+struct HlsSession {
+    instance: JsValue,
+    _handlers: Vec<Closure<dyn FnMut(JsValue, JsValue)>>,
+}
+#[derive(Clone, Default)]
+struct Gesture {
+    x: f64,
+    y: f64,
+    at: f64,
+    moved: bool,
+    hold: bool,
+    previous_rate: f64,
+    start: f64,
+    volume: bool,
+}
+struct Player {
+    session: u64,
+    attempt: u64,
+    active_url: String,
+    episode: Option<Value>,
+    series: Value,
+    episodes: Vec<Value>,
+    controller: Option<AbortController>,
+    switching: Option<AbortController>,
+    switch_generation: u64,
+    queue: Vec<usize>,
+    position: usize,
+    stream_index: usize,
+    settings: PlaybackSnapshot,
+    started: f64,
+    advanced: f64,
+    last_time: f64,
+    last_buffer: f64,
+    ready: bool,
+    metadata: bool,
+    refreshed: bool,
+    rollback: Option<Restore>,
+    bookmark: Option<PlaybackSnapshot>,
+    embedded: Option<Value>,
+    hls: Option<HlsSession>,
+    watchdog: Option<Interval>,
+    hud: Option<Timeout>,
+    pill: Option<Timeout>,
+    hold: Option<Timeout>,
+    embed_timer: Option<Timeout>,
+    gesture: Gesture,
+    last_tap: f64,
+    embed_handler: Option<Closure<dyn FnMut(Event)>>,
+    last_save: f64,
+    next_deadline: Option<f64>,
+    next_cancelled: bool,
+    season: String,
+    brightness: f64,
+}
+impl Default for Player {
+    fn default() -> Self {
+        Self {
+            session: 0,
+            attempt: 0,
+            active_url: String::new(),
+            episode: None,
+            series: Value::Null,
+            episodes: vec![],
+            controller: None,
+            switching: None,
+            switch_generation: 0,
+            queue: vec![],
+            position: 0,
+            stream_index: 0,
+            settings: PlaybackSnapshot::default(),
+            started: 0.,
+            advanced: 0.,
+            last_time: 0.,
+            last_buffer: 0.,
+            ready: false,
+            metadata: false,
+            refreshed: false,
+            rollback: None,
+            bookmark: None,
+            embedded: None,
+            hls: None,
+            watchdog: None,
+            hud: None,
+            pill: None,
+            hold: None,
+            embed_timer: None,
+            embed_handler: None,
+            gesture: Gesture::default(),
+            last_tap: 0.,
+            last_save: 0.,
+            next_deadline: None,
+            next_cancelled: false,
+            season: "1".into(),
+            brightness: 1.,
+        }
+    }
+}
+thread_local! { static STATE:RefCell<Player> = RefCell::new(Player::default()); }
+fn video() -> HtmlVideoElement {
+    el("nativePlayer").unchecked_into()
+}
+fn now() -> f64 {
+    js_sys::Date::now()
+}
+fn rows(v: &Value, key: &str) -> Vec<Value> {
+    v[key].as_array().cloned().unwrap_or_default()
+}
+fn style(id: &str, key: &str, value: &str) {
+    let _ = el(id)
+        .unchecked_into::<HtmlElement>()
+        .style()
+        .set_property(key, value);
+}
+fn class(id: &str, name: &str, enabled: bool) {
+    let _ = el(id).class_list().toggle_with_force(name, enabled);
+}
+fn call(target: &JsValue, name: &str, args: &Array) -> Result<JsValue, JsValue> {
+    let f = Reflect::get(target, &JsValue::from_str(name))?.dyn_into::<Function>()?;
+    f.apply(target, args)
+}
+fn args(values: &[JsValue]) -> Array {
+    values.iter().cloned().collect()
+}
+fn bridge(method: &str, value: JsValue) {
+    if let Ok(target) = Reflect::get(window().as_ref(), &"KrmziBridge".into()) {
+        let _ = call(&target, method, &args(&[value]));
+    }
+}
+fn source_name(source: &str) -> &str {
+    if source == "cinemana" {
+        "سينمانا"
+    } else {
+        "قرمزي"
+    }
+}
+fn current(session: u64, attempt: u64) -> bool {
+    STATE.with(|c| {
+        let p = c.borrow();
+        p.session == session && p.attempt == attempt
+    }) && is_open()
+}
+pub fn is_open() -> bool {
+    !el("mobilePlayer").class_list().contains("hidden")
+}
+pub fn current_episode() -> Option<Value> {
+    STATE.with(|c| c.borrow().episode.clone())
+}
+fn episode_identity() -> Option<Value> {
+    if let Some(episode) = current_episode() {
+        return Some(episode);
+    }
+    let url = STATE.with(|c| c.borrow().active_url.clone());
+    if url.is_empty() {
+        return None;
+    }
+    let mut context = app::episode_context(&url);
+    if !context.is_object() {
+        context = json!({});
+    }
+    context["url"] = Value::String(url);
+    Some(context)
+}
+pub fn snapshot() -> PlaybackSnapshot {
+    let v = video();
+    let bookmark = STATE.with(|c| {
+        let p = c.borrow();
+        p.embedded.as_ref().and(p.bookmark.clone())
+    });
+    bookmark.unwrap_or(PlaybackSnapshot {
+        time: v.current_time().max(0.),
+        paused: v.paused(),
+        rate: v.playback_rate(),
+        volume: v.volume(),
+        muted: v.muted(),
+    })
+}
+fn restore_point() -> Option<Restore> {
+    let settings = snapshot();
+    STATE.with(|c| {
+        let p = c.borrow();
+        Some(Restore {
+            episode: p.episode.clone()?,
+            series: p.series.clone(),
+            episodes: p.episodes.clone(),
+            settings,
+            stream_index: p.stream_index,
+            embedded: p.embedded.clone(),
+        })
+    })
+}
+fn cancel_switch() {
+    let (controller, pending_frame) = STATE.with(|c| {
+        let mut p = c.borrow_mut();
+        p.switch_generation += 1;
+        let pending = p.embed_timer.take().is_some();
+        (p.switching.take(), pending)
+    });
+    if let Some(controller) = controller {
+        controller.abort();
+    }
+    if pending_frame {
+        let frame = el("embedPlayer");
+        let _ = Reflect::set(frame.as_ref(), &"onload".into(), &JsValue::NULL);
+        let _ = Reflect::set(frame.as_ref(), &"onerror".into(), &JsValue::NULL);
+        let _ = frame.remove_attribute("src");
+        show("embedPlayer", false);
+        STATE.with(|c| c.borrow_mut().embed_handler = None);
+    }
+}
+pub fn sheet_closed() {
+    cancel_switch();
+}
+fn stop_hls() {
+    let previous = STATE.with(|c| c.borrow_mut().hls.take());
+    if let Some(previous) = previous {
+        let _ = call(&previous.instance, "destroy", &Array::new());
+    }
+}
+fn release_media() {
+    stop_hls();
+    let v = video();
+    let _ = v.pause();
+    let _ = v.remove_attribute("src");
+    let _ = v.remove_attribute("poster");
+    v.load();
+    let frame = el("embedPlayer");
+    let _ = Reflect::set(frame.as_ref(), &"onload".into(), &JsValue::NULL);
+    let _ = Reflect::set(frame.as_ref(), &"onerror".into(), &JsValue::NULL);
+    STATE.with(|c| c.borrow_mut().embed_handler = None);
+    show("nativePlayer", false);
+    show("embedPlayer", false);
+    let _ = frame.remove_attribute("src");
+    class("mobilePlayer", "embed-mode", false);
+    class("mobilePlayer", "video-playing", false);
+}
+fn loading(message: &str) {
+    html("playerSpinner",&format!("<div class=\"spinner-ring\"></div><p class=\"player-load-status\" role=\"status\">{}</p>",esc(message)));
+    class("mobilePlayer", "player-loading", true);
+    class("mobilePlayer", "player-error", false);
+    show("playerSpinner", true);
+}
+fn error(message: &str) {
+    html("playerSpinner",&format!("<p class=\"player-message\" role=\"status\">{}</p><div class=\"player-retry-actions\"><button class=\"player-retry-btn\" data-player-action=\"retry\">إعادة المحاولة</button><button class=\"player-retry-btn\" data-player-action=\"sources\">المصادر والسيرفرات</button></div>",esc(message)));
+    class("mobilePlayer", "player-loading", true);
+    class("mobilePlayer", "player-error", true);
+    show("playerSpinner", true);
+    show_hud(false);
+}
+fn art(item: &Value) -> String {
+    for key in ["artwork", "poster", "thumbnail"] {
+        let value = s(item, key);
+        if !value.is_empty() {
+            return value;
+        }
+    }
+    String::new()
+}
+fn backdrop(url: &str) {
+    style(
+        "playerBackdrop",
+        "background-image",
+        &if url.is_empty() {
+            "none".into()
+        } else {
+            format!("url({})", serde_json::to_string(url).unwrap_or_default())
+        },
+    );
+}
+fn title_ui(episode: &Value) {
+    text("hudEpTitle", &s(episode, "title"));
+    text("hudSeriesTitle", &s(episode, "seriesTitle"));
+    html(
+        "playerFavBtn",
+        if app::is_favorite(episode) {
+            "<i class=\"fa-solid fa-heart\"></i>"
+        } else {
+            "<i class=\"fa-regular fa-heart\"></i>"
+        },
+    );
+    let _ = el("playerFavBtn").set_attribute(
+        "aria-pressed",
+        if app::is_favorite(episode) {
+            "true"
+        } else {
+            "false"
+        },
+    );
+}
+fn subtitles(episode: &Value) {
+    let v = video();
+    let tracks = v.query_selector_all("track").unwrap();
+    for i in 0..tracks.length() {
+        if let Some(n) = tracks.item(i) {
+            let _ = v.remove_child(&n);
+        }
+    }
+    let tracks = rows(episode, "subtitles");
+    show("toggleSubtitlesBtn", !tracks.is_empty());
+    for track in tracks {
+        if let Ok(node) = document().create_element("track") {
+            let _ = node.set_attribute("kind", "subtitles");
+            let _ = node.set_attribute("label", &s(&track, "label"));
+            let _ = node.set_attribute("srclang", &s(&track, "lang"));
+            let url = format!(
+                "/api/cinemana/subtitle?url={}",
+                js_sys::encode_uri_component(&s(&track, "url"))
+            );
+            let _ = node.set_attribute("src", &url);
+            if s(&track, "lang") == "ar" {
+                let _ = node.set_attribute("default", "");
+            }
+            let _ = v.append_child(&node);
+        }
+    }
+}
+pub fn open_episode(url: String, resume: Option<PlaybackSnapshot>) {
+    open(url, resume, false);
+}
+fn open(url: String, resume: Option<PlaybackSnapshot>, fresh: bool) {
+    if url.is_empty() {
+        return;
+    }
+    save_history(true);
+    cancel_switch();
+    let context = app::episode_context(&url);
+    let resume = resume.unwrap_or_else(|| {
+        let time = context["currentTime"]
+            .as_f64()
+            .filter(|t| *t > 10.)
+            .unwrap_or(0.);
+        PlaybackSnapshot {
+            time,
+            volume: video().volume(),
+            muted: video().muted(),
+            ..Default::default()
+        }
+    });
+    let controller = AbortController::new().ok();
+    let session = STATE.with(|c| {
+        let mut p = c.borrow_mut();
+        if let Some(previous) = p.controller.take() {
+            previous.abort();
+        }
+        p.session += 1;
+        p.attempt += 1;
+        p.active_url = url.clone();
+        p.controller = controller.clone();
+        p.episode = None;
+        p.episodes.clear();
+        p.queue.clear();
+        p.series = Value::Null;
+        p.rollback = None;
+        p.bookmark = None;
+        p.embedded = None;
+        p.refreshed = fresh;
+        p.settings = resume.clone();
+        p.next_deadline = None;
+        p.next_cancelled = false;
+        p.embed_timer = None;
+        p.session
+    });
+    release_media();
+    show("mobilePlayer", true);
+    show("autoNextCard", false);
+    show("skipIntroBtn", false);
+    html("drawerEpisodesCarousel", "");
+    text("drawerCount", "جاري جلب الحلقات…");
+    backdrop(&art(&context));
+    text("hudEpTitle", &s(&context, "title"));
+    text("hudSeriesTitle", &s(&context, "seriesTitle"));
+    loading("جاري تجهيز الحلقة…");
+    show_hud(false);
+    spawn_local(async move {
+        let mut params = vec![("url", url.clone())];
+        if fresh {
+            params.push(("fresh", "1".into()));
+        }
+        let signal = controller.as_ref().map(|c| c.signal());
+        let result =
+            api::call_with_signal("/api/episode/detail", &params, None, signal.as_ref()).await;
+        if STATE.with(|c| c.borrow().session != session)
+            || signal.as_ref().is_some_and(|s| s.aborted())
+        {
+            return;
+        }
+        match result {
+            Ok(mut episode) if episode["error"].is_null() && episode["isSuccess"] != false => {
+                episode["artwork"] = Value::String(art(&context));
+                STATE.with(|c| {
+                    let mut p = c.borrow_mut();
+                    p.episode = Some(episode.clone());
+                    p.controller = None;
+                });
+                title_ui(&episode);
+                subtitles(&episode);
+                backdrop(&s(&episode, "artwork"));
+                if !rows(&episode, "directStreams").is_empty() {
+                    play_direct(None, resume, false);
+                } else if let Some(server) = rows(&episode, "servers").first() {
+                    play_embed(server.clone());
+                } else {
+                    error("ما توفرت روابط مشاهدة لهذه الحلقة. جرّب مصدراً آخر.");
+                }
+                let series_url = s(&episode, "seriesUrl");
+                if !series_url.is_empty() {
+                    load_drawer(series_url, session);
+                } else {
+                    text("drawerCount", "فيلم");
+                    show("drawerEpisodeTools", false);
+                    html(
+                        "drawerEpisodesCarousel",
+                        "<p class=\"empty-note\">أنت تشاهد فيلماً.</p>",
+                    );
+                }
+            }
+            _ => error(if catalogue::provider(&json!({"url":url})) == "cinemana" {
+                "سينمانا غير متاح على اتصالك. اختر قرمزي من المصادر أو أعد المحاولة."
+            } else {
+                "تعذر تجهيز الحلقة. أعد المحاولة أو اختر سيرفراً آخر."
+            }),
+        }
+    });
+}
+fn initial_index(streams: &[Value]) -> usize {
+    if let Some(index) = streams.iter().position(|s| s["type"] == "hls") {
+        return index;
+    }
+    if storage("krmzi_quality_mode").as_deref() == Some("manual") {
+        if let Some(index) = streams
+            .iter()
+            .position(|s| Some(crate::dom::s(s, "quality")) == storage("krmzi_pref_quality"))
+        {
+            return index;
+        }
+    }
+    streams
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| quality_height(s) <= 720 && quality_height(s) > 0)
+        .max_by_key(|(_, s)| quality_height(s))
+        .map(|(i, _)| i)
+        .unwrap_or(0)
+}
+fn quality_height(stream: &Value) -> u32 {
+    s(stream, "quality")
+        .chars()
+        .take_while(char::is_ascii_digit)
+        .collect::<String>()
+        .parse()
+        .unwrap_or(0)
+}
+fn play_direct(index: Option<usize>, settings: PlaybackSnapshot, transaction: bool) {
+    let streams = current_episode()
+        .map(|e| rows(&e, "directStreams"))
+        .unwrap_or_default();
+    if streams.is_empty() {
+        return fail_final();
+    }
+    let index = index
+        .unwrap_or_else(|| initial_index(&streams))
+        .min(streams.len() - 1);
+    let old = if transaction { restore_point() } else { None };
+    let mut rest: Vec<usize> = (0..streams.len())
+        .filter(|i| *i != index && streams[*i]["type"] != "hls")
+        .collect();
+    let height = quality_height(&streams[index]);
+    rest.sort_by_key(|i| {
+        (
+            quality_height(&streams[*i]) > height,
+            std::cmp::Reverse(quality_height(&streams[*i])),
+        )
+    });
+    let mut queue = vec![index];
+    queue.extend(rest);
+    queue.truncate(3);
+    STATE.with(|c| {
+        let mut p = c.borrow_mut();
+        if transaction && p.rollback.is_none() {
+            p.rollback = old;
+        }
+        p.settings = settings;
+        p.queue = queue;
+        p.position = 0;
+        p.embedded = None;
+        p.embed_timer = None;
+    });
+    start_attempt();
+}
+fn media_url(stream: &Value) -> String {
+    let url = s(stream, "url");
+    if stream["type"] == "hls" && stream["provider"] != "cinemana" {
+        format!("/api/media?url={}", js_sys::encode_uri_component(&url))
+    } else {
+        url
+    }
+}
+fn start_attempt() {
+    stop_hls();
+    let selected = STATE.with(|c| {
+        let mut p = c.borrow_mut();
+        let streams = rows(p.episode.as_ref()?, "directStreams");
+        let index = *p.queue.get(p.position)?;
+        let selected = streams.get(index)?.clone();
+        p.stream_index = index;
+        p.attempt += 1;
+        p.started = now();
+        p.advanced = p.started;
+        p.last_time = p.settings.time;
+        p.last_buffer = 0.;
+        p.ready = false;
+        p.metadata = false;
+        Some((
+            selected,
+            p.settings.clone(),
+            p.session,
+            p.attempt,
+            p.position,
+        ))
+    });
+    let Some((selected, settings, session, attempt, position)) = selected else {
+        return fail_final();
+    };
+    let v = video();
+    let _ = v.pause();
+    show("embedPlayer", false);
+    let _ = el("embedPlayer").remove_attribute("src");
+    show("nativePlayer", false);
+    class("mobilePlayer", "embed-mode", false);
+    class("mobilePlayer", "video-playing", false);
+    show("autoNextCard", false);
+    loading(if position > 0 {
+        "جاري تجربة رابط بديل…"
+    } else {
+        "جاري تحميل الفيديو…"
+    });
+    let source = current_episode()
+        .map(|ep| catalogue::provider(&ep).to_string())
+        .unwrap_or_default();
+    text(
+        "activeServerLabel",
+        &format!("{} · مباشر", source_name(&source)),
+    );
+    text("drawerActiveServerName", source_name(&source));
+    text("activeQualityLabel", &s(&selected, "quality"));
+    v.set_preload("auto");
+    v.set_volume(settings.volume.clamp(0., 1.));
+    v.set_muted(settings.muted);
+    v.set_playback_rate(settings.rate.clamp(0.5, 2.));
+    let hls = selected["type"] == "hls" && install_hls(&media_url(&selected), session, attempt);
+    if !hls {
+        v.set_src(&media_url(&selected));
+        v.load();
+    }
+    if !settings.paused {
+        play_video();
+    }
+    show_hud(!settings.paused);
+}
+fn install_hls(url: &str, session: u64, attempt: u64) -> bool {
+    let Ok(constructor) = Reflect::get(window().as_ref(), &"Hls".into()) else {
+        return false;
+    };
+    if call(&constructor, "isSupported", &Array::new())
+        .ok()
+        .and_then(|v| v.as_bool())
+        != Some(true)
+    {
+        return false;
+    }
+    let Ok(constructor_fn) = constructor.clone().dyn_into::<Function>() else {
+        return false;
+    };
+    let config = Object::new();
+    for (key, value) in [
+        ("enableWorker", JsValue::TRUE),
+        ("autoStartLoad", JsValue::FALSE),
+        ("maxBufferLength", 30.into()),
+        ("backBufferLength", 20.into()),
+    ] {
+        let _ = Reflect::set(&config, &key.into(), &value);
+    }
+    let Ok(engine) = Reflect::construct(&constructor_fn, &args(&[config.into()])) else {
+        return false;
+    };
+    let events = Reflect::get(&constructor, &"Events".into()).unwrap_or(JsValue::UNDEFINED);
+    let mut handlers = vec![];
+    for name in ["MANIFEST_PARSED", "ERROR", "LEVEL_SWITCHED"] {
+        let name = name.to_string();
+        let instance = engine.clone();
+        let event = Reflect::get(&events, &JsValue::from_str(&name))
+            .unwrap_or_else(|_| JsValue::from_str(&name));
+        let callback = Closure::wrap(Box::new(move |_event: JsValue, data: JsValue| {
+            if !current(session, attempt) {
+                return;
+            }
+            match name.as_str() {
+                "ERROR" => {
+                    if Reflect::get(&data, &"fatal".into())
+                        .ok()
+                        .and_then(|v| v.as_bool())
+                        == Some(true)
+                    {
+                        schedule_failure(session, attempt);
+                    }
+                }
+                "MANIFEST_PARSED" => {
+                    let levels = Reflect::get(&instance, &"levels".into())
+                        .map(|v| Array::from(&v))
+                        .unwrap_or_default();
+                    let manual = storage("krmzi_quality_mode").as_deref() == Some("manual");
+                    let target = if manual {
+                        storage("krmzi_pref_quality")
+                            .unwrap_or_default()
+                            .chars()
+                            .take_while(char::is_ascii_digit)
+                            .collect::<String>()
+                            .parse::<u32>()
+                            .unwrap_or(720)
+                    } else {
+                        720
+                    };
+                    let mut chosen = 0;
+                    let mut best = 0;
+                    for (i, level) in levels.iter().enumerate() {
+                        let height = Reflect::get(&level, &"height".into())
+                            .ok()
+                            .and_then(|v| v.as_f64())
+                            .unwrap_or(0.) as u32;
+                        if height <= target && height >= best {
+                            chosen = i;
+                            best = height;
+                        }
+                    }
+                    let _ = Reflect::set(&instance, &"startLevel".into(), &(chosen as u32).into());
+                    if manual {
+                        let _ = Reflect::set(
+                            &instance,
+                            &"currentLevel".into(),
+                            &(chosen as u32).into(),
+                        );
+                    }
+                    let position = STATE.with(|c| c.borrow().settings.time);
+                    let _ = call(
+                        &instance,
+                        "startLoad",
+                        &args(&[JsValue::from_f64(if position > 0. {
+                            position
+                        } else {
+                            -1.
+                        })]),
+                    );
+                }
+                _ => {
+                    if storage("krmzi_quality_mode").as_deref() != Some("manual") {
+                        text("activeQualityLabel", "تلقائي");
+                    }
+                }
+            }
+        }) as Box<dyn FnMut(JsValue, JsValue)>);
+        let _ = call(&engine, "on", &args(&[event, callback.as_ref().clone()]));
+        handlers.push(callback);
+    }
+    STATE.with(|c| {
+        c.borrow_mut().hls = Some(HlsSession {
+            instance: engine.clone(),
+            _handlers: handlers,
+        })
+    });
+    let _ = call(&engine, "loadSource", &args(&[JsValue::from_str(url)]));
+    let _ = call(&engine, "attachMedia", &args(&[video().into()]));
+    true
+}
+fn play_video() {
+    let v = video();
+    let Ok(promise) = v.play() else {
+        return;
+    };
+    let (session, attempt) = STATE.with(|c| {
+        let p = c.borrow();
+        (p.session, p.attempt)
+    });
+    spawn_local(async move {
+        if let Err(error) = JsFuture::from(promise).await {
+            if !current(session, attempt) {
+                return;
+            }
+            let name = Reflect::get(&error, &"name".into())
+                .ok()
+                .and_then(|v| v.as_string())
+                .unwrap_or_default();
+            if name == "NotAllowedError" {
+                STATE.with(|c| c.borrow_mut().settings.paused = true);
+                show("playerSpinner", false);
+                class("mobilePlayer", "player-loading", false);
+                show_hud(false);
+            }
+        }
+    });
+}
+fn schedule_failure(session: u64, attempt: u64) {
+    Timeout::new(0, move || {
+        if current(session, attempt) {
+            failed();
+        }
+    })
+    .forget();
+}
+fn failed() {
+    if STATE.with(|c| c.borrow().queue.is_empty()) {
+        return;
+    }
+    let time = video().current_time();
+    let next = STATE.with(|c| {
+        let mut p = c.borrow_mut();
+        if p.ready && time > 0. {
+            p.settings.time = time;
+        }
+        p.position += 1;
+        p.position < p.queue.len()
+    });
+    if next {
+        start_attempt();
+    } else {
+        fail_final();
+    }
+}
+fn fail_final() {
+    STATE.with(|c| {
+        let mut p = c.borrow_mut();
+        p.queue.clear();
+        p.attempt += 1;
+    });
+    stop_hls();
+    let restore = STATE.with(|c| c.borrow_mut().rollback.take());
+    if let Some(restore) = restore {
+        STATE.with(|c| {
+            let mut p = c.borrow_mut();
+            p.active_url = s(&restore.episode, "url");
+            p.episode = Some(restore.episode.clone());
+            p.series = restore.series.clone();
+            p.episodes = restore.episodes.clone();
+            p.refreshed = true;
+        });
+        title_ui(&restore.episode);
+        subtitles(&restore.episode);
+        backdrop(&s(&restore.episode, "artwork"));
+        if let Some(server) = restore.embedded {
+            play_embed(server);
+        } else {
+            play_direct(Some(restore.stream_index), restore.settings, false);
+        }
+        render_drawer();
+        app::notify("تعذر التبديل، رجعنا للسيرفر السابق");
+        return;
+    }
+    let refresh = STATE.with(|c| {
+        let mut p = c.borrow_mut();
+        if p.refreshed {
+            return None;
+        }
+        p.refreshed = true;
+        Some((p.episode.clone()?, p.settings.clone(), p.session, p.attempt))
+    });
+    if let Some((episode, mut settings, session, attempt)) = refresh {
+        settings.time = settings.time.max(video().current_time());
+        loading("جاري تجديد رابط المشاهدة…");
+        spawn_local(async move {
+            let result = api::call(
+                "/api/episode/detail",
+                &[("url", s(&episode, "url")), ("fresh", "1".into())],
+                None,
+            )
+            .await;
+            if !current(session, attempt) {
+                return;
+            }
+            if let Ok(mut replacement) = result {
+                if !rows(&replacement, "directStreams").is_empty() {
+                    replacement["artwork"] = episode["artwork"].clone();
+                    STATE.with(|c| c.borrow_mut().episode = Some(replacement));
+                    play_direct(None, settings, false);
+                    return;
+                }
+            }
+            fallback_embed();
+        });
+    } else {
+        fallback_embed();
+    }
+}
+fn fallback_embed() {
+    if let Some(server) = current_episode().and_then(|e| rows(&e, "servers").first().cloned()) {
+        play_embed(server);
+    } else {
+        error("تعذر تشغيل الروابط. أعد المحاولة أو اختر المصدر الآخر.");
+    }
+}
+fn play_embed(server: Value) {
+    let url = s(&server, "embedUrl");
+    if url.is_empty() {
+        return;
+    }
+    cancel_switch();
+    let bookmark = snapshot();
+    let (session, generation, keep_direct) = STATE.with(|c| {
+        let mut p = c.borrow_mut();
+        let direct =
+            p.embedded.is_none() && p.episode.is_some() && video().get_attribute("src").is_some();
+        if direct {
+            p.bookmark = Some(bookmark);
+        }
+        p.embed_timer = None;
+        (p.session, p.switch_generation, direct)
+    });
+    if !keep_direct {
+        loading("جاري فتح السيرفر الخارجي…");
+    } else {
+        pill("جاري فتح السيرفر، المشاهدة مستمرة");
+    }
+    show("embedPlayer", false);
+    let _ = el("embedPlayer").set_attribute("src", &url);
+    let frame = el("embedPlayer");
+    let loaded = Closure::wrap(Box::new(move |_e: Event| {
+        if STATE.with(|c| {
+            let p = c.borrow();
+            p.session != session || p.switch_generation != generation
+        }) {
+            return;
+        }
+        let _ = Reflect::set(el("embedPlayer").as_ref(), &"onload".into(), &JsValue::NULL);
+        stop_hls();
+        let v = video();
+        let _ = v.pause();
+        let _ = v.remove_attribute("src");
+        v.load();
+        show("nativePlayer", false);
+        show("embedPlayer", true);
+        show("playerSpinner", false);
+        class("mobilePlayer", "embed-mode", true);
+        class("mobilePlayer", "player-loading", false);
+        class("mobilePlayer", "player-error", false);
+        STATE.with(|c| {
+            let mut p = c.borrow_mut();
+            p.attempt += 1;
+            p.embedded = Some(server.clone());
+            p.embed_timer = None;
+            p.rollback = None;
+        });
+        text("activeServerLabel", &s(&server, "name"));
+        text("drawerActiveServerName", &s(&server, "name"));
+        text("activeQualityLabel", "من السيرفر");
+        pill("السيرفر الخارجي يتحكم بموضع المشاهدة");
+        show_hud(false);
+    }) as Box<dyn FnMut(Event)>);
+    let _ = Reflect::set(frame.as_ref(), &"onload".into(), loaded.as_ref());
+    STATE.with(|c| c.borrow_mut().embed_handler = Some(loaded));
+    let timer = Timeout::new(15000, move || {
+        if STATE.with(|c| {
+            let p = c.borrow();
+            p.session != session || p.switch_generation != generation || p.embed_timer.is_none()
+        }) {
+            return;
+        }
+        let _ = Reflect::set(el("embedPlayer").as_ref(), &"onload".into(), &JsValue::NULL);
+        let _ = el("embedPlayer").remove_attribute("src");
+        if keep_direct {
+            pill("تعذر فتح السيرفر، المشاهدة مستمرة");
+        } else {
+            error("تعذر فتح السيرفر. اختر سيرفراً آخر.");
+        }
+    });
+    STATE.with(|c| c.borrow_mut().embed_timer = Some(timer));
+}
+fn load_drawer(url: String, session: u64) {
+    spawn_local(async move {
+        if let Ok(series) = api::call("/api/series/detail", &[("url", url)], None).await {
+            if STATE.with(|c| c.borrow().session != session) {
+                return;
+            }
+            let episodes = rows(&series, "episodes");
+            let artwork = art(&series);
+            let needs_art = STATE.with(|c| {
+                let mut p = c.borrow_mut();
+                let needs_art = p
+                    .episode
+                    .as_ref()
+                    .is_some_and(|ep| s(ep, "artwork").is_empty());
+                if needs_art {
+                    if let Some(ep) = p.episode.as_mut() {
+                        ep["artwork"] = Value::String(artwork.clone());
+                    }
+                }
+                p.series = series;
+                p.episodes = episodes;
+                p.season = p
+                    .episode
+                    .as_ref()
+                    .map(|e| s(e, "season"))
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or_else(|| "1".into());
+                needs_art
+            });
+            if needs_art {
+                backdrop(&artwork);
+            }
+            show("drawerEpisodeTools", true);
+            if let Ok(input) = el("drawerEpisodeSearch").dyn_into::<HtmlInputElement>() {
+                input.set_value("");
+            }
+            render_drawer();
+        }
+    });
+}
+fn season_of(episode: &Value) -> String {
+    let season = s(episode, "season");
+    if season.is_empty() {
+        "1".into()
+    } else {
+        season
+    }
+}
+fn episode_card(ep: &Value, index: usize, artwork: &str, current_url: &str) -> String {
+    let url = s(ep, "url");
+    let active = url == current_url;
+    let number = catalogue::episode_number(ep);
+    let number = if number.is_empty() {
+        (index + 1).to_string()
+    } else {
+        number
+    };
+    format!("<button class=\"episode-card {}\" data-player-action=\"episode\" data-url=\"{}\" {}><span class=\"episode-art\">{}<span class=\"episode-play\"><i class=\"fa-solid fa-play\"></i></span></span><span class=\"episode-copy\"><small>{}</small><strong>{}</strong></span><span class=\"episode-number\">{}</span></button>",if active{"active"}else{""},esc(&url),if active{"aria-current=\"true\""}else{""},if artwork.is_empty(){"<i class=\"fa-solid fa-film\"></i>".into()}else{format!("<img src=\"{}\" alt=\"\" loading=\"lazy\" decoding=\"async\">",esc(artwork))},if active{"تشاهد الآن"}else{""},esc(&s(ep,"title")),esc(&number))
+}
+fn render_drawer() {
+    let (episodes, season, episode) = STATE.with(|c| {
+        let p = c.borrow();
+        (
+            p.episodes.clone(),
+            p.season.clone(),
+            p.episode.clone().unwrap_or(Value::Null),
+        )
+    });
+    let mut seasons: Vec<String> = episodes.iter().map(season_of).collect();
+    seasons.sort_by_key(|s| s.parse::<u32>().unwrap_or(0));
+    seasons.dedup();
+    html("drawerSeasonTabs",&seasons.iter().map(|s|format!("<button class=\"season-tab {}\" data-player-action=\"season\" data-season=\"{}\">الموسم {}</button>",if *s==season{"active"}else{""},esc(s),esc(s))).collect::<String>());
+    let query = el("drawerEpisodeSearch")
+        .dyn_into::<HtmlInputElement>()
+        .map(|i| catalogue::normalized(&i.value()))
+        .unwrap_or_default();
+    let artwork = s(&episode, "artwork");
+    let current_url = s(&episode, "url");
+    let content = episodes
+        .iter()
+        .filter(|ep| season_of(ep) == season)
+        .filter(|ep| {
+            query.is_empty()
+                || catalogue::normalized(&format!(
+                    "{} {}",
+                    s(ep, "title"),
+                    catalogue::episode_number(ep)
+                ))
+                .contains(&query)
+        })
+        .enumerate()
+        .map(|(i, ep)| episode_card(ep, i, &artwork, &current_url))
+        .collect::<String>();
+    html(
+        "drawerEpisodesCarousel",
+        if content.is_empty() {
+            "<p class=\"empty-note\">لا توجد حلقات مطابقة.</p>"
+        } else {
+            &content
+        },
+    );
+    text("drawerCount", &format!("{} حلقة", episodes.len()));
+}
+fn all_episodes() {
+    let (episodes, episode) = STATE.with(|c| {
+        let p = c.borrow();
+        (p.episodes.clone(), p.episode.clone().unwrap_or(Value::Null))
+    });
+    let content = episodes
+        .iter()
+        .enumerate()
+        .map(|(i, ep)| episode_card(ep, i, &s(&episode, "artwork"), &s(&episode, "url")))
+        .collect::<String>();
+    app::open_sheet(
+        "الحلقات",
+        &format!(
+            "<div class=\"episode-card-list\">{}</div>",
+            if content.is_empty() {
+                "<p class=\"empty-note\">قائمة الحلقات غير متاحة.</p>"
+            } else {
+                &content
+            }
+        ),
+    );
+}
+pub fn open_sources() {
+    let Some(episode) = episode_identity() else {
+        return;
+    };
+    let current_source = catalogue::provider(&episode);
+    let other = if current_source == "cinemana" {
+        "krmzi"
+    } else {
+        "cinemana"
+    };
+    let group = app::known_series().into_iter().find(|item| {
+        s(item, "url") == s(&episode, "seriesUrl")
+            || rows(item, "offers")
+                .iter()
+                .any(|o| s(o, "url") == s(&episode, "seriesUrl"))
+    });
+    let offers = group
+        .as_ref()
+        .map(|g| rows(g, "offers"))
+        .unwrap_or_default();
+    let mut content = String::new();
+    let mut found = false;
+    for offer in offers.iter().filter(|o| catalogue::provider(o) == other) {
+        found = true;
+        content.push_str(&format!("<button class=\"sheet-row\" data-player-action=\"provider\" data-url=\"{}\"><span>نفس الحلقة من {}</span><i class=\"fa-solid fa-arrow-right-arrow-left\"></i></button>",esc(&s(offer,"url")),source_name(other)));
+    }
+    if !found {
+        content.push_str(&format!("<button class=\"sheet-row\" data-player-action=\"discover\" data-source=\"{other}\"><span>ابحث عن نفس العمل في {}</span><i class=\"fa-solid fa-arrow-right-arrow-left\"></i></button>",source_name(other)));
+    }
+    if !rows(&episode, "directStreams").is_empty() {
+        content.push_str(&format!("<button class=\"sheet-row\" data-player-action=\"direct\"><span>مشغّل {} المباشر</span><span class=\"sheet-pill\">{}</span></button>",source_name(current_source),if STATE.with(|c|c.borrow().embedded.is_none()){"الحالي"}else{"تشغيل"}));
+    }
+    for (i, server) in rows(&episode, "servers").iter().enumerate() {
+        content.push_str(&format!("<button class=\"sheet-row\" data-player-action=\"embed\" data-index=\"{i}\"><span>سيرفر {}</span><i class=\"fa-solid fa-server\"></i></button>",esc(&s(server,"name"))));
+    }
+    content.push_str("<p class=\"source-switch-note\">التبديل بين المصدرين المباشرين يحتفظ بموضعك وإعداداتك. السيرفر الخارجي يستخدم مشغّله الخاص وقد يبدأ من البداية.</p>");
+    app::open_sheet("المصادر والسيرفرات", &content);
+}
+fn begin_switch(title: &str) -> (u64, u64, Option<AbortController>) {
+    cancel_switch();
+    app::open_sheet(
+        title,
+        "<p class=\"empty-note\" role=\"status\">المشاهدة مستمرة أثناء تجهيز المصدر الآخر…</p>",
+    );
+    let controller = AbortController::new().ok();
+    let (session, generation) = STATE.with(|c| {
+        let mut p = c.borrow_mut();
+        p.switching = controller.clone();
+        (p.session, p.switch_generation)
+    });
+    (session, generation, controller)
+}
+fn switch_current(session: u64, generation: u64, controller: &Option<AbortController>) -> bool {
+    STATE.with(|c| {
+        let p = c.borrow();
+        p.session == session && p.switch_generation == generation
+    }) && controller.as_ref().is_none_or(|c| !c.signal().aborted())
+        && is_open()
+}
+fn discover(source: String) {
+    let Some(episode) = episode_identity() else {
+        return;
+    };
+    let series = STATE.with(|c| c.borrow().series.clone());
+    let title = if !s(&episode, "seriesTitle").is_empty() {
+        s(&episode, "seriesTitle")
+    } else if !s(&series, "title").is_empty() {
+        s(&series, "title")
+    } else {
+        s(&episode, "title")
+    };
+    let identity = json!({"title":title,"aliases":if episode["aliases"].is_array(){&episode["aliases"]}else{&series["aliases"]},"year":series["year"],"type":"series","edition":catalogue::edition(&episode)});
+    let (session, generation, controller) =
+        begin_switch(&format!("البحث في {}", source_name(&source)));
+    spawn_local(async move {
+        let signal = controller.as_ref().map(|c| c.signal());
+        let result = api::call_with_signal(
+            "/api/search",
+            &[("q", title)],
+            Some(&source),
+            signal.as_ref(),
+        )
+        .await;
+        if !switch_current(session, generation, &controller) {
+            return;
+        }
+        match result.ok().and_then(|v|catalogue::find_counterpart(&identity,&rows(&v,"results"))) {
+            Some(candidate)=>switch_provider(s(&candidate,"url")),
+            None=>app::open_sheet("ما لقينا تطابقاً مؤكداً","<p class=\"empty-note\">المسلسل غير متاح أو اسمه مختلف في المصدر الآخر. المشاهدة الحالية مستمرة.</p>"),
+        }
+    });
+}
+fn switch_provider(url: String) {
+    let Some(episode) = episode_identity() else {
+        return;
+    };
+    let (session, generation, controller) = begin_switch("تجهيز المصدر البديل");
+    spawn_local(async move {
+        let signal = controller.as_ref().map(|c| c.signal());
+        let result = api::call_with_signal(
+            "/api/series/detail",
+            &[("url", url.clone())],
+            None,
+            signal.as_ref(),
+        )
+        .await;
+        if !switch_current(session, generation, &controller) {
+            return;
+        }
+        let Ok(series) = result else {
+            app::open_sheet(
+                "المصدر غير متاح",
+                "<p class=\"empty-note\">تعذر جلب الحلقات. المشاهدة الحالية مستمرة.</p>",
+            );
+            return;
+        };
+        let Some(matched) = catalogue::match_episode(&episode, &rows(&series, "episodes")) else {
+            app::open_sheet("ترقيم الحلقات مختلف",&format!("<p class=\"empty-note\">ما غيرنا الحلقة تلقائياً حتى ما نفتح حلقة مختلفة.</p><button class=\"sheet-row\" data-player-action=\"browse-source\" data-url=\"{}\">عرض حلقات المصدر الآخر</button>",esc(&url)));
+            return;
+        };
+        let result = api::call_with_signal(
+            "/api/episode/detail",
+            &[("url", s(&matched, "url"))],
+            None,
+            signal.as_ref(),
+        )
+        .await;
+        if !switch_current(session, generation, &controller) {
+            return;
+        }
+        let Ok(mut candidate) = result else {
+            app::open_sheet(
+                "المصدر غير متاح",
+                "<p class=\"empty-note\">تعذر تجهيز رابط الحلقة. المشاهدة الحالية مستمرة.</p>",
+            );
+            return;
+        };
+        if rows(&candidate, "directStreams").is_empty() {
+            app::open_sheet("الرابط غير متاح","<p class=\"empty-note\">المصدر الآخر لا يوفر رابطاً مباشراً لهذه الحلقة. المشاهدة الحالية مستمرة.</p>");
+            return;
+        }
+        let settings = snapshot();
+        let restore = restore_point();
+        save_history(true);
+        app::close_sheet();
+        candidate["artwork"] = Value::String(s(&episode, "artwork"));
+        let candidate_clone = candidate.clone();
+        let new_session = STATE.with(|c| {
+            let mut p = c.borrow_mut();
+            p.session += 1;
+            p.attempt += 1;
+            p.active_url = s(&candidate, "url");
+            p.episode = Some(candidate);
+            p.series = series;
+            p.episodes = vec![];
+            p.rollback = restore;
+            p.refreshed = false;
+            p.next_deadline = None;
+            p.next_cancelled = false;
+            p.session
+        });
+        title_ui(&candidate_clone);
+        subtitles(&candidate_clone);
+        backdrop(&s(&candidate_clone, "artwork"));
+        play_direct(None, settings, false);
+        load_drawer(s(&candidate_clone, "seriesUrl"), new_session);
+    });
+}
+fn switch_mirror(index: usize) {
+    let Some(episode) = current_episode() else {
+        return;
+    };
+    let Some(server) = rows(&episode, "servers").get(index).cloned() else {
+        return;
+    };
+    if !s(&server, "name").eq_ignore_ascii_case("ok") || s(&server, "id").is_empty() {
+        app::close_sheet();
+        play_embed(server);
+        return;
+    }
+    let (session, generation, controller) = begin_switch("تجهيز السيرفر البديل");
+    spawn_local(async move {
+        let signal = controller.as_ref().map(|c| c.signal());
+        let result = api::call_with_signal(
+            "/api/episode/detail",
+            &[
+                ("url", s(&episode, "url")),
+                ("server", s(&server, "id")),
+                ("fresh", "1".into()),
+            ],
+            None,
+            signal.as_ref(),
+        )
+        .await;
+        if !switch_current(session, generation, &controller) {
+            return;
+        }
+        match result {
+            Ok(mut candidate) if !rows(&candidate, "directStreams").is_empty() => {
+                let settings = snapshot();
+                let restore = restore_point();
+                app::close_sheet();
+                candidate["artwork"] = episode["artwork"].clone();
+                STATE.with(|c| {
+                    let mut p = c.borrow_mut();
+                    p.session += 1;
+                    p.episode = Some(candidate);
+                    p.rollback = restore;
+                    p.refreshed = false;
+                });
+                play_direct(None, settings, false);
+            }
+            Ok(_) => {
+                app::close_sheet();
+                play_embed(server);
+            }
+            Err(_) => app::open_sheet(
+                "السيرفر غير متاح",
+                "<p class=\"empty-note\">تعذر تجهيز السيرفر المحدد. المشاهدة الحالية مستمرة.</p>",
+            ),
+        }
+    });
+}
+pub fn open_quality() {
+    let Some(episode) = current_episode() else {
+        return;
+    };
+    let mut content="<button class=\"sheet-row\" data-player-action=\"quality-auto\"><span>تلقائي</span></button>".to_string();
+    let levels = hls_levels();
+    if !levels.is_empty() {
+        for (index, height) in levels.iter().enumerate() {
+            content.push_str(&format!("<button class=\"sheet-row\" data-player-action=\"quality-hls\" data-index=\"{index}\"><span>{height}p</span></button>"));
+        }
+    } else {
+        for (index, stream) in rows(&episode, "directStreams").iter().enumerate() {
+            if stream["type"] != "hls" {
+                content.push_str(&format!("<button class=\"sheet-row\" data-player-action=\"quality\" data-index=\"{index}\"><span>{}</span></button>",esc(&s(stream,"quality"))));
+            }
+        }
+    }
+    app::open_sheet("جودة الفيديو", &content);
+}
+fn hls_levels() -> Vec<u32> {
+    STATE.with(|c| {
+        c.borrow()
+            .hls
+            .as_ref()
+            .map(|h| {
+                Reflect::get(&h.instance, &"levels".into())
+                    .map(|levels| {
+                        Array::from(&levels)
+                            .iter()
+                            .map(|level| {
+                                Reflect::get(&level, &"height".into())
+                                    .ok()
+                                    .and_then(|v| v.as_f64())
+                                    .unwrap_or(0.) as u32
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            })
+            .unwrap_or_default()
+    })
+}
+fn hls_level(index: i32) {
+    let instance = STATE.with(|c| c.borrow().hls.as_ref().map(|h| h.instance.clone()));
+    if let Some(h) = instance {
+        let _ = Reflect::set(&h, &"nextLevel".into(), &index.into());
+    }
+}
+fn save_history(force: bool) {
+    let time = now();
+    let episode = STATE.with(|c| {
+        let mut p = c.borrow_mut();
+        if !force && time - p.last_save < 5000. {
+            return None;
+        }
+        p.last_save = time;
+        p.episode.clone()
+    });
+    if let Some(episode) = episode {
+        let settings = snapshot();
+        let duration = video().duration();
+        app::save_player_history(
+            &episode,
+            settings.time,
+            if duration.is_finite() { duration } else { 0. },
+        );
+    }
+}
+pub fn close() {
+    save_history(true);
+    cancel_switch();
+    STATE.with(|c| {
+        let mut p = c.borrow_mut();
+        p.session += 1;
+        p.attempt += 1;
+        p.active_url.clear();
+        if let Some(controller) = p.controller.take() {
+            controller.abort();
+        }
+        p.episode = None;
+        p.episodes.clear();
+        p.rollback = None;
+        p.embed_timer = None;
+        p.next_deadline = None;
+        p.hud = None;
+        p.hold = None;
+    });
+    release_media();
+    show("mobilePlayer", false);
+    show("playerSpinner", false);
+    bridge("setVideoPlaying", false.into());
+    bridge("setLandscape", false.into());
+    if document().fullscreen_element().is_some() {
+        document().exit_fullscreen();
+    }
+}
+pub fn toggle() {
+    if !is_open() {
+        return;
+    }
+    if video().paused() {
+        play_video();
+    } else {
+        let _ = video().pause();
+    }
+    show_hud(true);
+}
+pub fn seek(seconds: f64) {
+    let v = video();
+    if v.duration().is_finite() && v.duration() > 0. {
+        v.set_current_time((v.current_time() + seconds).clamp(0., v.duration()));
+        progress();
+        pill(&format!(
+            "{}{seconds} ثانية",
+            if seconds > 0. { "+" } else { "" }
+        ));
+        show_hud(true);
+    }
+}
+fn format_time(time: f64) -> String {
+    let time = if time.is_finite() {
+        time.max(0.) as u64
+    } else {
+        0
+    };
+    if time >= 3600 {
+        format!("{}:{:02}:{:02}", time / 3600, (time / 60) % 60, time % 60)
+    } else {
+        format!("{:02}:{:02}", time / 60, time % 60)
+    }
+}
+fn progress() {
+    let v = video();
+    let duration = v.duration();
+    if !duration.is_finite() || duration <= 0. {
+        return;
+    }
+    let time = v.current_time();
+    let percent = (time / duration * 100.).clamp(0., 100.);
+    style("timelineProgress", "width", &format!("{percent}%"));
+    style("timelineThumb", "left", &format!("{percent}%"));
+    text(
+        "hudTime",
+        &format!("{} / {}", format_time(time), format_time(duration)),
+    );
+    let _ = el("timelineBar").set_attribute("aria-valuenow", &format!("{percent:.0}"));
+    let _ = el("timelineBar").set_attribute(
+        "aria-valuetext",
+        &format!("{} من {}", format_time(time), format_time(duration)),
+    );
+    let buffered = v.buffered();
+    if buffered.length() > 0 {
+        if let Ok(end) = buffered.end(buffered.length() - 1) {
+            style(
+                "timelineLoaded",
+                "width",
+                &format!("{}%", (end / duration * 100.).clamp(0., 100.)),
+            );
+        }
+    }
+    if time < duration - 1. {
+        let cancel = STATE.with(|c| {
+            let mut p = c.borrow_mut();
+            p.next_deadline.take().is_some()
+        });
+        if cancel {
+            show("autoNextCard", false);
+        }
+    }
+    save_history(false);
+}
+fn metadata() {
+    let settings = STATE.with(|c| {
+        let mut p = c.borrow_mut();
+        p.metadata = true;
+        p.settings.clone()
+    });
+    let v = video();
+    if v.duration().is_finite() && settings.time > 0. {
+        v.set_current_time(settings.time.min((v.duration() - 1.).max(0.)));
+    }
+    v.set_playback_rate(settings.rate);
+    v.set_volume(settings.volume);
+    v.set_muted(settings.muted);
+    progress();
+}
+fn ready(playing: bool) {
+    let (paused, switched) = STATE.with(|c| {
+        let mut p = c.borrow_mut();
+        p.ready = true;
+        p.advanced = now();
+        let commit = playing || p.settings.paused;
+        let switched = if commit {
+            p.rollback.take().is_some()
+        } else {
+            false
+        };
+        (p.settings.paused, switched)
+    });
+    show("nativePlayer", true);
+    if playing || paused {
+        show("playerSpinner", false);
+        class("mobilePlayer", "player-loading", false);
+        class("mobilePlayer", "player-error", false);
+        class("mobilePlayer", "video-playing", true);
+    }
+    if switched {
+        save_history(true);
+        pill("تم تغيير المصدر مع حفظ موضعك");
+    }
+}
+fn pill(message: &str) {
+    text("swipeValue", message);
+    html("swipeIcon", "");
+    show("swipeIndicator", true);
+    let timer = Timeout::new(1600, || show("swipeIndicator", false));
+    STATE.with(|c| c.borrow_mut().pill = Some(timer));
+}
+fn show_hud(auto_hide: bool) {
+    class("playerHudTop", "hud-hidden", false);
+    class("playerHudBottom", "hud-hidden", false);
+    class(
+        "hudCenter",
+        "hud-hidden",
+        STATE.with(|c| c.borrow().embedded.is_some()),
+    );
+    let timer = if auto_hide {
+        Some(Timeout::new(3200, || {
+            if !video().paused() || STATE.with(|c| c.borrow().embedded.is_some()) {
+                class("playerHudTop", "hud-hidden", true);
+                class("playerHudBottom", "hud-hidden", true);
+                class("hudCenter", "hud-hidden", true);
+            }
+        }))
+    } else {
+        None
+    };
+    STATE.with(|c| c.borrow_mut().hud = timer);
+}
+fn next_episode() {
+    let next = STATE.with(|c| {
+        let p = c.borrow();
+        let current_url = p.episode.as_ref().map(|e| s(e, "url"))?;
+        let index = p.episodes.iter().position(|e| s(e, "url") == current_url)?;
+        p.episodes.get(index + 1).map(|e| s(e, "url"))
+    });
+    if let Some(url) = next {
+        open_episode(url, None);
+    }
+}
+fn ended() {
+    save_history(true);
+    let next = STATE.with(|c| {
+        let mut p = c.borrow_mut();
+        if p.next_cancelled {
+            return None;
+        }
+        let url = p.episode.as_ref().map(|e| s(e, "url"))?;
+        let index = p.episodes.iter().position(|e| s(e, "url") == url)?;
+        let next = p.episodes.get(index + 1)?.clone();
+        p.next_deadline = Some(now() + 5000.);
+        Some(next)
+    });
+    if let Some(next) = next {
+        text("autoNextTitle", &s(&next, "title"));
+        text("autoNextTimer", "5");
+        show("autoNextCard", true);
+    }
+    show_hud(false);
+}
+fn tick() {
+    if !is_open() {
+        return;
+    }
+    let v = video();
+    let time = v.current_time();
+    let buffered = v.buffered();
+    let end = if buffered.length() > 0 {
+        buffered.end(buffered.length() - 1).unwrap_or(0.)
+    } else {
+        0.
+    };
+    let (failure, next) = STATE.with(|c| {
+        let mut p = c.borrow_mut();
+        let now = now();
+        let next = p.next_deadline.is_some_and(|deadline| now >= deadline);
+        if let Some(deadline) = p.next_deadline {
+            text(
+                "autoNextTimer",
+                &format!("{}", ((deadline - now) / 1000.).ceil().max(0.)),
+            );
+        }
+        if next {
+            p.next_deadline = None;
+        }
+        let waiting = p.episode.is_some() && p.embedded.is_none() && !p.queue.is_empty();
+        if document().hidden() || (p.ready && v.paused()) {
+            p.advanced = now;
+            return (false, next);
+        }
+        if time > p.last_time + 0.1 || end > p.last_buffer + 0.1 {
+            p.advanced = now;
+        }
+        p.last_time = time;
+        p.last_buffer = end;
+        let failed = waiting
+            && ((!p.ready && now - p.started > 16000.)
+                || now - p.advanced > if p.ready { 14000. } else { 6500. });
+        (failed, next)
+    });
+    if next {
+        next_episode();
+    } else if failure {
+        failed();
+    }
+}
+fn toggle_subtitles() {
+    let Some(tracks) = video().text_tracks() else {
+        return;
+    };
+    let mut showing = false;
+    let mut preferred = None;
+    for index in 0..tracks.length() {
+        if let Some(track) = tracks.get(index) {
+            showing |= track.mode() == TextTrackMode::Showing;
+            if preferred.is_none() || track.language() == "ar" {
+                preferred = Some(track.clone());
+            }
+            track.set_mode(TextTrackMode::Disabled);
+        }
+    }
+    if !showing {
+        if let Some(track) = preferred {
+            track.set_mode(TextTrackMode::Showing);
+        }
+    }
+    pill(if showing {
+        "الترجمة متوقفة"
+    } else {
+        "الترجمة مفعّلة"
+    });
+}
+fn fullscreen() {
+    if document().fullscreen_element().is_some() {
+        document().exit_fullscreen();
+        bridge("setLandscape", false.into());
+    } else {
+        let _ = el("appFrame").request_fullscreen();
+        bridge("setLandscape", true.into());
+    }
+}
+fn pip() {
+    let document: JsValue = document().into();
+    let active =
+        Reflect::get(&document, &"pictureInPictureElement".into()).unwrap_or(JsValue::NULL);
+    let result = if active.is_null() || active.is_undefined() {
+        call(video().as_ref(), "requestPictureInPicture", &Array::new())
+    } else {
+        call(&document, "exitPictureInPicture", &Array::new())
+    };
+    if let Ok(promise) = result {
+        if let Ok(promise) = promise.dyn_into::<Promise>() {
+            spawn_local(async move {
+                let _ = JsFuture::from(promise).await;
+            });
+        }
+    }
+}
+fn fit() {
+    let previous = storage("otium_fit_mode").unwrap_or_else(|| "contain".into());
+    let mode = match previous.as_str() {
+        "contain" => "cover",
+        "cover" => "fill",
+        _ => "contain",
+    };
+    for name in ["contain", "cover", "fill"] {
+        class("playerCanvas", &format!("fit-{name}"), name == mode);
+    }
+    store("otium_fit_mode", mode);
+    pill(match mode {
+        "cover" => "ملء الشاشة مع قص الأطراف",
+        "fill" => "تمدد الفيديو",
+        _ => "إظهار الفيديو بالكامل",
+    });
+}
+pub fn controls_help() {
+    let rows = [
+        ("Space / K", "تشغيل وإيقاف"),
+        ("J / L", "رجوع وتقديم 10 ثوانٍ"),
+        ("← / →", "5 ثوانٍ · مع Shift: 30 ثانية"),
+        ("↑ / ↓", "مستوى الصوت"),
+        ("0–9", "الانتقال لنسبة من الفيديو"),
+        ("M", "كتم الصوت"),
+        ("F / P", "ملء الشاشة / صورة مصغرة"),
+        ("C / Q", "الترجمة / الجودة"),
+        ("E / S", "الحلقات / المصادر"),
+        ("[ / ]", "سرعة العرض"),
+        ("N", "الحلقة التالية"),
+        ("Esc", "إغلاق القائمة أو المشغل"),
+    ];
+    app::open_sheet("اختصارات التحكم",&format!("<div class=\"controls-guide\"><p>انقر مرتين للتقديم أو الرجوع. اضغط مطوّلاً لسرعة 2×. اسحب عمودياً يمين الفيديو للصوت ويساره للإضاءة.</p><div class=\"shortcut-list\">{}</div></div>",rows.iter().map(|(key,label)|format!("<div><kbd dir=\"ltr\">{}</kbd><span>{}</span></div>",esc(key),esc(label))).collect::<String>()));
+}
+fn action(row: Element) {
+    let kind = row.get_attribute("data-player-action").unwrap_or_default();
+    let url = row.get_attribute("data-url").unwrap_or_default();
+    let index = row
+        .get_attribute("data-index")
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(0);
+    match kind.as_str() {
+        "episode" => {
+            app::close_sheet();
+            open_episode(url, None);
+        }
+        "retry" => {
+            let url = STATE.with(|c| c.borrow().active_url.clone());
+            if !url.is_empty() {
+                open(url, Some(snapshot()), true);
+            }
+        }
+        "sources" => open_sources(),
+        "provider" => switch_provider(url),
+        "discover" => discover(row.get_attribute("data-source").unwrap_or_default()),
+        "browse-source" => app::open_series(url),
+        "season" => {
+            STATE.with(|c| {
+                c.borrow_mut().season = row
+                    .get_attribute("data-season")
+                    .unwrap_or_else(|| "1".into())
+            });
+            render_drawer();
+        }
+        "direct" => {
+            let embedded = STATE.with(|c| c.borrow().embedded.is_some());
+            app::close_sheet();
+            if embedded || el("mobilePlayer").class_list().contains("player-error") {
+                let settings = snapshot();
+                play_direct(None, settings, true);
+            }
+        }
+        "embed" => switch_mirror(index),
+        "quality" => {
+            let settings = snapshot();
+            if let Some(ep) = current_episode() {
+                if let Some(stream) = rows(&ep, "directStreams").get(index) {
+                    store("krmzi_quality_mode", "manual");
+                    store("krmzi_pref_quality", &s(stream, "quality"));
+                    app::close_sheet();
+                    play_direct(Some(index), settings, true);
+                }
+            }
+        }
+        "quality-auto" => {
+            store("krmzi_quality_mode", "auto");
+            let has_hls = STATE.with(|c| c.borrow().hls.is_some());
+            app::close_sheet();
+            if has_hls {
+                hls_level(-1);
+                text("activeQualityLabel", "تلقائي");
+            } else {
+                play_direct(None, snapshot(), true);
+            }
+        }
+        "quality-hls" => {
+            hls_level(index as i32);
+            store("krmzi_quality_mode", "manual");
+            if let Some(height) = hls_levels().get(index) {
+                let name = format!("{height}p");
+                store("krmzi_pref_quality", &name);
+                text("activeQualityLabel", &name);
+            }
+            app::close_sheet();
+        }
+        _ => {}
+    }
+}
+fn keyboard(event: Event) {
+    let Ok(event) = event.dyn_into::<KeyboardEvent>() else {
+        return;
+    };
+    if !is_open() || event.ctrl_key() || event.alt_key() || event.meta_key() {
+        return;
+    }
+    if event
+        .target()
+        .and_then(|t| t.dyn_into::<Element>().ok())
+        .is_some_and(|e| {
+            e.matches("input,textarea,select,[contenteditable=true]")
+                .unwrap_or(false)
+        })
+    {
+        return;
+    }
+    if !el("sheetBackdrop").class_list().contains("hidden") {
+        return;
+    }
+    let key = event.key().to_lowercase();
+    let tv = document()
+        .document_element()
+        .and_then(|e| e.get_attribute("data-display"))
+        .as_deref()
+        == Some("tv");
+    if tv && ["arrowleft", "arrowright", "arrowup", "arrowdown"].contains(&key.as_str()) {
+        event.prevent_default();
+        remote_arrow(&key);
+        return;
+    }
+    if tv
+        && key == "enter"
+        && event
+            .target()
+            .and_then(|t| t.dyn_into::<Element>().ok())
+            .is_some_and(|e| e.id() == "playerCanvas")
+    {
+        event.prevent_default();
+        toggle();
+        return;
+    }
+    let v = video();
+    let mut handled = true;
+    match key.as_str() {
+        " " | "k" | "mediaplaypause" => {
+            if key == " "
+                && event
+                    .target()
+                    .and_then(|t| t.dyn_into::<Element>().ok())
+                    .is_some_and(|e| e.tag_name() == "BUTTON")
+            {
+                return;
+            }
+            toggle();
+        }
+        "j" | "mediarewind" => seek(-10.),
+        "l" | "mediafastforward" => seek(10.),
+        "arrowleft" => seek(if event.shift_key() { -30. } else { -5. }),
+        "arrowright" => seek(if event.shift_key() { 30. } else { 5. }),
+        "arrowup" => {
+            v.set_muted(false);
+            v.set_volume((v.volume() + 0.05).min(1.));
+            pill(&format!("الصوت {:.0}%", v.volume() * 100.));
+        }
+        "arrowdown" => {
+            v.set_muted(false);
+            v.set_volume((v.volume() - 0.05).max(0.));
+            pill(&format!("الصوت {:.0}%", v.volume() * 100.));
+        }
+        "m" => v.set_muted(!v.muted()),
+        "f" => fullscreen(),
+        "p" => pip(),
+        "c" => toggle_subtitles(),
+        "q" => open_quality(),
+        "s" => open_sources(),
+        "e" => all_episodes(),
+        "n" | "mediatracknext" => next_episode(),
+        "a" => fit(),
+        "[" | "]" => {
+            let rate = (v.playback_rate() + if key == "]" { 0.25 } else { -0.25 }).clamp(0.5, 2.);
+            v.set_playback_rate(rate);
+            pill(&format!("{rate}×"));
+        }
+        "?" | "/" => controls_help(),
+        _ => {
+            if key.len() == 1 && key.chars().all(|c| c.is_ascii_digit()) && v.duration().is_finite()
+            {
+                v.set_current_time(key.parse::<f64>().unwrap_or(0.) / 10. * v.duration());
+                progress();
+            } else {
+                handled = false;
+            }
+        }
+    }
+    if handled {
+        event.prevent_default();
+    }
+}
+fn remote_arrow(key: &str) {
+    if el("playerHudTop").class_list().contains("hud-hidden") {
+        if key == "arrowleft" || key == "arrowright" {
+            seek(if key == "arrowleft" { -10. } else { 10. });
+            for id in ["playerHudTop", "playerHudBottom", "hudCenter"] {
+                class(id, "hud-hidden", true);
+            }
+            focus("playerCanvas");
+            return;
+        }
+        show_hud(false);
+        focus("centerPlay");
+        return;
+    }
+    let Ok(nodes) =
+        el("mobilePlayer").query_selector_all("button,input,select,[tabindex='0'],[role='slider']")
+    else {
+        return;
+    };
+    let nodes = (0..nodes.length())
+        .filter_map(|index| nodes.item(index)?.dyn_into::<HtmlElement>().ok())
+        .filter(|node| {
+            node.offset_width() > 0
+                && node.offset_height() > 0
+                && !node.has_attribute("disabled")
+                && node.closest(".hidden,.hud-hidden").ok().flatten().is_none()
+                && window()
+                    .get_computed_style(node)
+                    .ok()
+                    .flatten()
+                    .is_some_and(|style| {
+                        style.get_property_value("visibility").unwrap_or_default() != "hidden"
+                    })
+        })
+        .collect::<Vec<_>>();
+    let Some(current) = document().active_element() else {
+        focus("centerPlay");
+        return;
+    };
+    if !nodes
+        .iter()
+        .any(|node| node.unchecked_ref::<Element>() == &current)
+    {
+        focus("centerPlay");
+        return;
+    }
+    let rect = current.get_bounding_client_rect();
+    let horizontal = key == "arrowleft" || key == "arrowright";
+    let sign = if key == "arrowleft" || key == "arrowup" {
+        -1.
+    } else {
+        1.
+    };
+    let mut ranked = nodes
+        .iter()
+        .filter(|node| node.unchecked_ref::<Element>() != &current)
+        .filter_map(|node| {
+            let other = node.get_bounding_client_rect();
+            let dx = other.x() + other.width() / 2. - rect.x() - rect.width() / 2.;
+            let dy = other.y() + other.height() / 2. - rect.y() - rect.height() / 2.;
+            let distance = if horizontal { dx } else { dy } * sign;
+            if distance <= 3. {
+                return None;
+            }
+            let side = if horizontal { dy.abs() } else { dx.abs() };
+            let overlap = if horizontal {
+                other.top() < rect.bottom() && other.bottom() > rect.top()
+            } else {
+                other.left() < rect.right() && other.right() > rect.left()
+            };
+            Some((
+                distance + side * 3. + if overlap { 0. } else { 1000. },
+                node,
+            ))
+        })
+        .collect::<Vec<_>>();
+    ranked.sort_by(|a, b| a.0.total_cmp(&b.0));
+    if let Some((_, next)) = ranked.first() {
+        let options = web_sys::FocusOptions::new();
+        options.set_prevent_scroll(true);
+        let _ = next.focus_with_options(&options);
+        next.scroll_into_view_with_bool(false);
+    }
+}
+fn pointer_seek(event: &PointerEvent) {
+    let rect = el("timelineBar").get_bounding_client_rect();
+    let v = video();
+    if v.duration().is_finite() && rect.width() > 0. {
+        v.set_current_time(
+            ((event.client_x() as f64 - rect.left()) / rect.width()).clamp(0., 1.) * v.duration(),
+        );
+        progress();
+        show_hud(true);
+    }
+}
+fn gestures() {
+    on("gesturesLayer", "pointerdown", |event| {
+        let Ok(event) = event.dyn_into::<PointerEvent>() else {
+            return;
+        };
+        if STATE.with(|c| c.borrow().embedded.is_some()) {
+            return;
+        }
+        let rect = el("gesturesLayer").get_bounding_client_rect();
+        let volume = event.client_x() as f64 - rect.left() > rect.width() / 2.;
+        let v = video();
+        let gesture = Gesture {
+            x: event.client_x() as f64,
+            y: event.client_y() as f64,
+            at: now(),
+            moved: false,
+            hold: false,
+            previous_rate: v.playback_rate(),
+            start: if volume {
+                v.volume()
+            } else {
+                STATE.with(|c| c.borrow().brightness)
+            },
+            volume,
+        };
+        let hold = Timeout::new(350, || {
+            let enable = STATE.with(|c| {
+                let mut p = c.borrow_mut();
+                if p.gesture.moved || video().paused() {
+                    return false;
+                }
+                p.gesture.hold = true;
+                true
+            });
+            if enable {
+                video().set_playback_rate(2.);
+                show("speed2xPill", true);
+            }
+        });
+        STATE.with(|c| {
+            let mut p = c.borrow_mut();
+            p.gesture = gesture;
+            p.hold = Some(hold);
+        });
+        let _ = el("gesturesLayer").set_pointer_capture(event.pointer_id());
+    });
+    on("gesturesLayer", "pointermove", |event| {
+        let Ok(event) = event.dyn_into::<PointerEvent>() else {
+            return;
+        };
+        if !el("gesturesLayer").has_pointer_capture(event.pointer_id()) {
+            return;
+        }
+        let gesture = STATE.with(|c| c.borrow().gesture.clone());
+        let dx = event.client_x() as f64 - gesture.x;
+        let dy = event.client_y() as f64 - gesture.y;
+        if dx.abs() > 12. || dy.abs() > 12. {
+            STATE.with(|c| {
+                let mut p = c.borrow_mut();
+                p.gesture.moved = true;
+                p.hold = None;
+            });
+        }
+        if dy.abs() > 12. && dy.abs() > dx.abs() {
+            let value = (gesture.start - dy / 140.).clamp(0.05, 1.);
+            if gesture.volume {
+                video().set_volume(value);
+                video().set_muted(false);
+                pill(&format!("الصوت {:.0}%", value * 100.));
+            } else {
+                STATE.with(|c| c.borrow_mut().brightness = value);
+                style(
+                    "brightnessFilter",
+                    "--brightness-darkness",
+                    &((1. - value) * 0.85).to_string(),
+                );
+                pill(&format!("الإضاءة {:.0}%", value * 100.));
+            }
+        }
+    });
+    for name in ["pointerup", "pointercancel"] {
+        let cancel = name == "pointercancel";
+        on("gesturesLayer", name, move |event| {
+            let Ok(event) = event.dyn_into::<PointerEvent>() else {
+                return;
+            };
+            let _ = el("gesturesLayer").release_pointer_capture(event.pointer_id());
+            let gesture = STATE.with(|c| {
+                let mut p = c.borrow_mut();
+                p.hold = None;
+                p.gesture.clone()
+            });
+            if gesture.hold {
+                video().set_playback_rate(gesture.previous_rate);
+                show("speed2xPill", false);
+                return;
+            }
+            if cancel || gesture.moved {
+                return;
+            }
+            let double = STATE.with(|c| {
+                let mut p = c.borrow_mut();
+                let double = gesture.at - p.last_tap < 300. && p.last_tap > 0.;
+                p.last_tap = if double { 0. } else { gesture.at };
+                double
+            });
+            if double {
+                let rect = el("gesturesLayer").get_bounding_client_rect();
+                seek(if gesture.x - rect.left() < rect.width() / 2. {
+                    -10.
+                } else {
+                    10.
+                });
+            } else {
+                show_hud(true);
+            }
+        });
+    }
+}
+pub fn init() {
+    on("dismissPlayerBtn", "click", |_| close());
+    on("centerPlay", "click", |_| toggle());
+    on("centerRewind", "click", |_| seek(-10.));
+    on("centerForward", "click", |_| seek(10.));
+    on("openServersSheetBtn", "click", |_| open_sources());
+    on("drawerOpenServersBtn", "click", |_| open_sources());
+    on("openQualitySheetBtn", "click", |_| open_quality());
+    on("openEpisodesSheetBtn", "click", |_| all_episodes());
+    on("toggleSubtitlesBtn", "click", |_| toggle_subtitles());
+    on("toggleFullscreenBtn", "click", |_| fullscreen());
+    on("togglePipBtn", "click", |_| pip());
+    on("toggleAspectRatioBtn", "click", |_| fit());
+    on("playerFavBtn", "click", |_| {
+        if let Some(ep) = current_episode() {
+            app::toggle_favorite(&ep);
+            title_ui(&ep);
+        }
+    });
+    on("drawerEpisodeSearch", "input", |_| render_drawer());
+    on("autoNextPlayBtn", "click", |_| next_episode());
+    on("autoNextCancelBtn", "click", |_| {
+        STATE.with(|c| {
+            let mut p = c.borrow_mut();
+            p.next_deadline = None;
+            p.next_cancelled = true;
+        });
+        show("autoNextCard", false);
+    });
+    on("nativePlayer", "loadedmetadata", |_| {
+        if is_open() {
+            metadata();
+        }
+    });
+    on("nativePlayer", "canplay", |_| {
+        if is_open() {
+            ready(false);
+        }
+    });
+    on("nativePlayer", "playing", |_| {
+        if is_open() && STATE.with(|c| c.borrow().embedded.is_none()) {
+            ready(true);
+        }
+    });
+    on("nativePlayer", "play", |_| {
+        html("centerPlay", "<i class=\"fa-solid fa-pause\"></i>");
+        bridge("setVideoPlaying", true.into());
+    });
+    on("nativePlayer", "pause", |_| {
+        html("centerPlay", "<i class=\"fa-solid fa-play\"></i>");
+        bridge("setVideoPlaying", false.into());
+    });
+    on("nativePlayer", "timeupdate", |_| progress());
+    on("nativePlayer", "progress", |_| progress());
+    on("nativePlayer", "ended", |_| ended());
+    on("nativePlayer", "error", |_| {
+        if is_open() && STATE.with(|c| c.borrow().embedded.is_none()) {
+            let (session, attempt) = STATE.with(|c| {
+                let p = c.borrow();
+                (p.session, p.attempt)
+            });
+            schedule_failure(session, attempt);
+        }
+    });
+    on("nativePlayer", "waiting", |_| {
+        if is_open() && !video().paused() && STATE.with(|c| c.borrow().embedded.is_none()) {
+            loading("جاري تحميل الفيديو…");
+        }
+    });
+    on("timelineBar", "pointerdown", |event| {
+        if let Ok(event) = event.dyn_into::<PointerEvent>() {
+            event.prevent_default();
+            let _ = el("timelineBar").set_pointer_capture(event.pointer_id());
+            pointer_seek(&event);
+        }
+    });
+    on("timelineBar", "pointermove", |event| {
+        if let Ok(event) = event.dyn_into::<PointerEvent>() {
+            if el("timelineBar").has_pointer_capture(event.pointer_id()) {
+                pointer_seek(&event);
+            }
+        }
+    });
+    on("timelineBar", "pointerup", |event| {
+        if let Ok(event) = event.dyn_into::<PointerEvent>() {
+            let _ = el("timelineBar").release_pointer_capture(event.pointer_id());
+        }
+    });
+    on("timelineBar", "keydown", |event| {
+        if let Ok(event) = event.dyn_into::<KeyboardEvent>() {
+            if ["ArrowLeft", "ArrowRight"].contains(&event.key().as_str()) {
+                event.prevent_default();
+                event.stop_propagation();
+                seek(if event.key() == "ArrowLeft" { -5. } else { 5. });
+            }
+        }
+    });
+    listen(document().as_ref(), "click", |event| {
+        if let Some(row) = event
+            .target()
+            .and_then(|t| t.dyn_into::<Element>().ok())
+            .and_then(|e| e.closest("[data-player-action]").ok().flatten())
+        {
+            event.prevent_default();
+            action(row);
+        }
+    });
+    listen(document().as_ref(), "keydown", keyboard);
+    listen(window().as_ref(), "pagehide", |_| save_history(true));
+    gestures();
+    let timer = Interval::new(1000, tick);
+    STATE.with(|c| c.borrow_mut().watchdog = Some(timer));
+    let fit_mode = storage("otium_fit_mode").unwrap_or_else(|| "contain".into());
+    class("playerCanvas", &format!("fit-{fit_mode}"), true);
+}

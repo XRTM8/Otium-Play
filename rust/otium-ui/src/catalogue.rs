@@ -1,0 +1,565 @@
+use serde_json::{json, Value};
+use std::collections::{HashMap, HashSet};
+use unicode_normalization::UnicodeNormalization;
+
+fn field(value: &Value, key: &str) -> String {
+    match &value[key] {
+        Value::String(value) => value.clone(),
+        Value::Number(value) => value.to_string(),
+        _ => String::new(),
+    }
+}
+
+fn digit(char: char) -> char {
+    match char {
+        '\u{0660}'..='\u{0669}' => char::from_u32('0' as u32 + char as u32 - 0x660).unwrap(),
+        '\u{06f0}'..='\u{06f9}' => char::from_u32('0' as u32 + char as u32 - 0x6f0).unwrap(),
+        _ => char,
+    }
+}
+
+/// Exact title normalization deliberately avoids fuzzy matching: choosing the
+/// wrong remake, episode or dubbed edition is worse than showing a source list.
+pub fn normalized(value: &str) -> String {
+    let clean: String = value
+        .nfkc()
+        .flat_map(char::to_lowercase)
+        .filter_map(|char| match char {
+            '\u{064b}'..='\u{065f}' | '\u{0670}' | '\u{0640}' => None,
+            'أ' | 'إ' | 'آ' | 'ٱ' => Some('ا'),
+            'ى' => Some('ي'),
+            char if char.is_alphanumeric() => Some(digit(char)),
+            _ => Some(' '),
+        })
+        .collect();
+    let mut words: Vec<&str> = clean.split_whitespace().collect();
+    if words
+        .first()
+        .is_some_and(|word| ["مسلسل", "فيلم"].contains(word))
+    {
+        words.remove(0);
+    }
+    if let Some(index) = words.windows(2).position(|words| {
+        words[0] == "الحلقة"
+            && words[1]
+                .chars()
+                .next()
+                .is_some_and(|char| char.is_ascii_digit())
+    }) {
+        words.truncate(index);
+    }
+    if words.last() == Some(&"قرمزي") {
+        words.pop();
+    }
+    if words
+        .last()
+        .is_some_and(|word| ["كامل", "بالعربية"].contains(word))
+    {
+        words.pop();
+    }
+    if words
+        .last()
+        .is_some_and(|word| ["مترجم", "مترجمة", "مدبلج", "مدبلجة"].contains(word))
+    {
+        words.pop();
+    }
+    let mut result = Vec::new();
+    let mut index = 0;
+    while index < words.len() {
+        if words[index] == "و"
+            && words.get(index + 1).is_some_and(|word| {
+                word.chars()
+                    .next()
+                    .is_some_and(|char| ('\u{0621}'..='\u{064a}').contains(&char))
+            })
+        {
+            result.push(format!("و{}", words[index + 1]));
+            index += 2;
+        } else {
+            result.push(words[index].to_owned());
+            index += 1;
+        }
+    }
+    result.join(" ")
+}
+
+pub fn provider(value: &Value) -> &str {
+    value["source"]
+        .as_str()
+        .filter(|source| !source.is_empty())
+        .unwrap_or_else(|| {
+            if value["url"].as_str().unwrap_or("").starts_with("cinemana:") {
+                "cinemana"
+            } else {
+                "krmzi"
+            }
+        })
+}
+
+/// Dubbed releases may use different episode cuts and lengths. Keep them in a
+/// separate identity even when the Arabic display title and year are identical.
+pub fn edition(value: &Value) -> &'static str {
+    if value["edition"] == "dubbed" {
+        return "dubbed";
+    }
+    if value["edition"] == "original" {
+        return "original";
+    }
+    let mut descriptions = [
+        "title",
+        "seriesTitle",
+        "ar_title",
+        "en_title",
+        "other_title",
+    ]
+    .iter()
+    .map(|key| field(value, key))
+    .collect::<Vec<_>>();
+    if let Some(aliases) = value["aliases"].as_array() {
+        descriptions.extend(aliases.iter().filter_map(Value::as_str).map(str::to_owned));
+    }
+    let dubbed = descriptions.iter().any(|description| {
+        let lower = description
+            .nfkc()
+            .flat_map(char::to_lowercase)
+            .collect::<String>();
+        lower.contains("مدبلج")
+            || lower
+                .split(|char: char| !char.is_alphanumeric())
+                .any(|word| word == "dubbed" || word == "dub")
+    });
+    if dubbed {
+        "dubbed"
+    } else {
+        "original"
+    }
+}
+
+fn kind(value: &Value) -> &'static str {
+    if value["type"] == "series"
+        || value["mediaType"] == "series"
+        || value["url"].as_str().unwrap_or("").contains("/series/")
+    {
+        "series"
+    } else if value["type"] == "movie" || value["mediaType"] == "movie" {
+        "movie"
+    } else {
+        "episode"
+    }
+}
+
+fn number(value: &str) -> String {
+    let digits: String = value.chars().map(digit).collect();
+    let trimmed = digits.trim();
+    if trimmed
+        .chars()
+        .all(|char| char.is_ascii_digit() || char == '.')
+    {
+        if let Ok(number) = trimmed.parse::<f64>() {
+            if number.is_finite() {
+                return number.to_string();
+            }
+        }
+    }
+    trimmed.to_owned()
+}
+
+pub fn episode_number(value: &Value) -> String {
+    let explicit = field(value, "episodeNum");
+    if !explicit.is_empty() {
+        return number(&explicit);
+    }
+    let title: String = field(value, "title").chars().map(digit).collect();
+    title
+        .split_once("الحلقة")
+        .map(|(_, rest)| {
+            number(
+                &rest
+                    .trim_start()
+                    .chars()
+                    .take_while(|char| char.is_ascii_digit() || *char == '.')
+                    .collect::<String>(),
+            )
+        })
+        .unwrap_or_default()
+}
+
+fn season(value: &Value) -> String {
+    let value = number(&field(value, "season"));
+    if value.is_empty() {
+        "1".to_owned()
+    } else {
+        value
+    }
+}
+
+fn titles(value: &Value) -> Vec<String> {
+    let mut titles = vec![normalized(&field(value, "title"))];
+    if let Some(aliases) = value["aliases"].as_array() {
+        titles.extend(aliases.iter().filter_map(Value::as_str).map(normalized));
+    }
+    if let Some(offers) = value["offers"].as_array() {
+        for offer in offers {
+            titles.push(normalized(&field(offer, "title")));
+            if let Some(aliases) = offer["aliases"].as_array() {
+                titles.extend(aliases.iter().filter_map(Value::as_str).map(normalized));
+            }
+        }
+    }
+    let mut seen = HashSet::new();
+    titles.retain(|title| !title.is_empty() && title != "بدون عنوان" && seen.insert(title.clone()));
+    titles
+}
+
+fn year(value: &str) -> String {
+    let value = number(value);
+    if value == "0" {
+        String::new()
+    } else {
+        value
+    }
+}
+fn compatible_year(a: &str, b: &str) -> bool {
+    let a = year(a);
+    let b = year(b);
+    a.is_empty() || b.is_empty() || a == b
+}
+
+struct Group {
+    kind: &'static str,
+    edition: &'static str,
+    year: String,
+    episode: String,
+    season: String,
+    offers: Vec<Value>,
+    urls: HashSet<String>,
+}
+
+fn identity(kind: &str, edition: &str, title: &str, episode: &str, season: &str) -> String {
+    if kind == "episode" {
+        format!("{kind}\0{edition}\0{title}\0{episode}\0{season}")
+    } else {
+        format!("{kind}\0{edition}\0{title}")
+    }
+}
+
+/// Indexed lookup keeps loading later catalogue pages linear in the number of
+/// cards; aliases remain provider offers rather than separate duplicate tiles.
+pub fn merge(items: &[Value], preferred: &str) -> Vec<Value> {
+    let mut groups: Vec<Group> = Vec::new();
+    let mut index: HashMap<String, Vec<usize>> = HashMap::new();
+    let mut urls: HashMap<String, usize> = HashMap::new();
+    for item in items {
+        let url = field(item, "url");
+        if url.is_empty() {
+            continue;
+        }
+        let kind = kind(item);
+        let edition = edition(item);
+        let titles = titles(item);
+        let year = year(&field(item, "year"));
+        let episode = episode_number(item);
+        let season = season(item);
+        let keys: Vec<String> = titles
+            .iter()
+            .map(|title| identity(kind, edition, title, &episode, &season))
+            .collect();
+        let mut candidates: Vec<usize> = urls
+            .get(&url)
+            .copied()
+            .into_iter()
+            .chain(
+                keys.iter()
+                    .flat_map(|key| index.get(key).into_iter().flatten().copied()),
+            )
+            .collect();
+        candidates.sort_unstable();
+        candidates.dedup();
+        let found = candidates.into_iter().find(|&i| {
+            let group = &groups[i];
+            group.kind == kind
+                && group.edition == edition
+                && (group.urls.contains(&url) || compatible_year(&group.year, &year))
+                && (kind != "episode" || (group.episode == episode && group.season == season))
+        });
+        let at = found.unwrap_or_else(|| {
+            let at = groups.len();
+            groups.push(Group {
+                kind,
+                edition,
+                year: year.clone(),
+                episode: episode.clone(),
+                season: season.clone(),
+                offers: Vec::new(),
+                urls: HashSet::new(),
+            });
+            at
+        });
+        let group = &mut groups[at];
+        if group.year.is_empty() && !year.is_empty() {
+            group.year = year;
+        }
+        let offers = item["offers"]
+            .as_array()
+            .filter(|offers| !offers.is_empty())
+            .cloned()
+            .unwrap_or_else(|| vec![item.clone()]);
+        for mut offer in offers {
+            let offer_url = field(&offer, "url");
+            if offer_url.is_empty() || !group.urls.insert(offer_url.clone()) {
+                continue;
+            }
+            offer["source"] = json!(provider(&offer));
+            urls.insert(offer_url, at);
+            group.offers.push(offer);
+        }
+        for key in keys {
+            let entries = index.entry(key).or_default();
+            if !entries.contains(&at) {
+                entries.push(at);
+            }
+        }
+    }
+    groups
+        .into_iter()
+        .filter_map(|group| {
+            let mut primary = group
+                .offers
+                .iter()
+                .find(|offer| provider(offer) == preferred)
+                .or_else(|| group.offers.first())?
+                .clone();
+            for key in ["year", "thumbnail", "artwork", "poster", "story"] {
+                if field(&primary, key).is_empty() {
+                    if let Some(value) = group
+                        .offers
+                        .iter()
+                        .map(|offer| &offer[key])
+                        .find(|value| !value.is_null() && value.as_str() != Some(""))
+                    {
+                        primary[key] = value.clone();
+                    }
+                }
+            }
+            let mut sources: Vec<&str> = Vec::new();
+            for offer in &group.offers {
+                let source = provider(offer);
+                if !sources.contains(&source) {
+                    sources.push(source);
+                }
+            }
+            primary["sources"] = json!(sources);
+            primary["edition"] = json!(group.edition);
+            primary["offers"] = json!(group.offers);
+            Some(primary)
+        })
+        .collect()
+}
+
+pub fn match_episode(current: &Value, episodes: &[Value]) -> Option<Value> {
+    let number = episode_number(current);
+    if number.is_empty() {
+        return None;
+    }
+    let mut found = episodes.iter().filter(|episode| {
+        episode_number(episode) == number
+            && season(current) == season(episode)
+            && edition(current) == edition(episode)
+    });
+    let first = found.next()?;
+    if found.next().is_some() {
+        None
+    } else {
+        Some(first.clone())
+    }
+}
+
+pub fn find_counterpart(item: &Value, candidates: &[Value]) -> Option<Value> {
+    let titles = titles(item);
+    if titles.is_empty() || kind(item) != "series" {
+        return None;
+    }
+    let year = field(item, "year");
+    let matches: Vec<Value> = candidates
+        .iter()
+        .filter(|candidate| {
+            kind(candidate) == "series"
+                && edition(item) == edition(candidate)
+                && compatible_year(&year, &field(candidate, "year"))
+                && self::titles(candidate)
+                    .iter()
+                    .any(|title| titles.contains(title))
+        })
+        .cloned()
+        .collect();
+    let matches = merge(&matches, "cinemana");
+    if matches.len() == 1 {
+        matches.into_iter().next()
+    } else {
+        None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn dubbed_editions_stay_separate_and_never_match_original_episode_numbers() {
+        let original = json!({"url":"https://krmzi.org/series/sea/","title":"مسلسل هذا البحر سوف يفيض","type":"series","year":2025});
+        let dubbed = json!({"url":"cinemana:3129341","title":"هذا البحر سوف يفيض","aliases":["Tasacak Bu Deniz Dubbed"],"type":"series","year":2025});
+        let alternate = json!({"url":"cinemana:1320095","title":"هذا البحر سوف يفيض","aliases":["Tasacak Bu Deniz"],"type":"series","year":2025});
+        let merged = merge(
+            &[original.clone(), dubbed.clone(), alternate.clone()],
+            "cinemana",
+        );
+        assert_eq!(merged.len(), 2);
+        let original_group = merged
+            .iter()
+            .find(|item| edition(item) == "original")
+            .unwrap();
+        assert_eq!(original_group["offers"].as_array().unwrap().len(), 2);
+        assert_eq!(original_group["url"], "cinemana:1320095");
+        assert_eq!(
+            find_counterpart(&original, &[dubbed.clone(), alternate]).unwrap()["url"],
+            "cinemana:1320095"
+        );
+        assert!(find_counterpart(&original, &[dubbed]).is_none());
+        assert!(match_episode(
+            &json!({"episodeNum":2,"edition":"original"}),
+            &[json!({"episodeNum":2,"aliases":["Series Dubbed"]})]
+        )
+        .is_none());
+        assert_eq!(edition(&json!({"title":"مسلسل التجربة مدبلج"})), "dubbed");
+        assert_eq!(edition(&json!({"en_title":"Show Undubbed"})), "original");
+    }
+    #[test]
+    fn aliases_and_arabic_identity_keep_both_sources() {
+        let result = merge(
+            &[
+                json!({"url":"https://krmzi.org/series/a","title":"مسلسل ورود و ذنوب مترجم - قرمزي","type":"series"}),
+                json!({"url":"cinemana:12","title":"ورود وذنوب","mediaType":"series","year":2025}),
+            ],
+            "cinemana",
+        );
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0]["offers"].as_array().unwrap().len(), 2);
+        assert_eq!(result[0]["url"], "cinemana:12");
+    }
+    #[test]
+    fn unknown_year_does_not_bridge_known_remakes() {
+        let result = merge(
+            &[
+                json!({"url":"a","title":"The Return","type":"series"}),
+                json!({"url":"b","title":"The Return","type":"series","year":2010}),
+                json!({"url":"c","title":"The Return","type":"series","year":2025}),
+            ],
+            "cinemana",
+        );
+        assert_eq!(result.len(), 2);
+    }
+    #[test]
+    fn counterpart_rejects_movie_namesakes_and_ambiguous_remakes() {
+        let item = json!({"title":"مسلسل التجربة","type":"series","aliases":["The Experiment"]});
+        assert!(find_counterpart(
+            &item,
+            &[json!({"url":"cinemana:1","title":"The Experiment","mediaType":"movie"})]
+        )
+        .is_none());
+        assert!(find_counterpart(
+            &item,
+            &[
+                json!({"url":"a","title":"The Experiment","type":"series","year":2025}),
+                json!({"url":"b","title":"The Experiment","type":"series","year":1990})
+            ]
+        )
+        .is_none());
+        assert_eq!(
+            find_counterpart(
+                &item,
+                &[json!({"url":"cinemana:1","title":"The Experiment","mediaType":"series"})]
+            )
+            .unwrap()["url"],
+            "cinemana:1"
+        );
+    }
+    #[test]
+    fn episode_matching_normalizes_digits_without_guessing() {
+        let current = json!({"episodeNum":"٠٢","season":"١"});
+        assert_eq!(
+            match_episode(
+                &current,
+                &[json!({"url":"yes","episodeNum":"2","season":"01"})]
+            )
+            .unwrap()["url"],
+            "yes"
+        );
+        assert!(match_episode(
+            &current,
+            &[
+                json!({"url":"a","episodeNum":2}),
+                json!({"url":"b","episodeNum":2})
+            ]
+        )
+        .is_none());
+        assert!(
+            match_episode(&json!({"episodeNum":"2.5"}), &[json!({"episodeNum":"2"})]).is_none()
+        );
+        assert_eq!(episode_number(&json!({"title":"الحلقة ۰۲"})), "2");
+    }
+    #[test]
+    fn untitled_cards_and_same_title_different_episodes_remain_separate() {
+        assert_eq!(
+            merge(
+                &[
+                    json!({"url":"a","type":"series"}),
+                    json!({"url":"b","type":"series"})
+                ],
+                "cinemana"
+            )
+            .len(),
+            2
+        );
+        assert_eq!(
+            merge(
+                &[
+                    json!({"url":"a","title":"التجربة الحلقة 1","type":"episode"}),
+                    json!({"url":"b","title":"التجربة الحلقة 2","type":"episode"})
+                ],
+                "cinemana"
+            )
+            .len(),
+            2
+        );
+    }
+    #[test]
+    fn placeholders_zero_years_and_updated_metadata_do_not_hide_titles() {
+        assert_eq!(
+            merge(
+                &[
+                    json!({"url":"a","title":"بدون عنوان","type":"series"}),
+                    json!({"url":"b","title":"بدون عنوان","type":"series"})
+                ],
+                "cinemana"
+            )
+            .len(),
+            2
+        );
+        let records = [
+            json!({"url":"a","title":"The Return","type":"series","year":0}),
+            json!({"url":"b","title":"The Return","type":"series","year":2025}),
+            json!({"url":"c","title":"The Return","type":"series","year":1990}),
+        ];
+        assert_eq!(merge(&records, "cinemana").len(), 2);
+        assert_eq!(
+            merge(
+                &[
+                    json!({"url":"same","title":"Name","type":"series","year":2025}),
+                    json!({"url":"same","title":"Name","type":"series","year":2026})
+                ],
+                "cinemana"
+            )
+            .len(),
+            1
+        );
+    }
+}

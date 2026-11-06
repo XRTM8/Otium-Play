@@ -1,17 +1,17 @@
-/* Otium Play — luminous violet, quiet surfaces, distinct device layouts. */
+/* Otium Play — dark glass surfaces and device-specific layouts. */
 :root {
-  --bg-core: #050608;
-  --bg-surface: #0c0e15;
-  --bg-elevated: #131722;
-  --bg-glass: rgba(12, 14, 21, 0.78);
-  --bg-glass-dock: rgba(7, 9, 14, 0.88);
-  --text-main: #ffffff;
-  --text-sub: #9ea4ba;
-  --text-dim: #656b82;
-  --accent: #ff2d55;
-  --accent-soft: rgba(255, 45, 85, 0.14);
-  --accent-glow: rgba(255, 45, 85, 0.32);
-  --accent-gradient: linear-gradient(135deg, #ff2d55 0%, #e11d48 50%, #8b5cf6 100%);
+  --bg-core: #090c10;
+  --bg-surface: #12171e;
+  --bg-elevated: #1b222b;
+  --bg-glass: rgba(18, 23, 30, 0.91);
+  --bg-glass-dock: rgba(14, 19, 25, 0.89);
+  --text-main: #f4f5f3;
+  --text-sub: #b5bec8;
+  --text-dim: #909ca9;
+  --accent: #ccdde1;
+  --accent-soft: rgba(204, 221, 225, 0.1);
+  --accent-glow: transparent;
+  --accent-gradient: #ccdde1;
   --line-subtle: #ffffff12;
   --line-hover: #ffffff30;
   --radius-xs: 8px;
@@ -900,7 +900,7 @@ video::cue { font-family: 'Tajawal', sans-serif; font-size: 90%; background: #00
 .sheet-content { display: flex; flex-direction: column; gap: 8px; min-height: 0; flex: 1 1 auto; overflow-y: auto; overscroll-behavior: contain; }
 .sheet-row { flex: 0 0 auto; width: 100%; min-height: 50px; padding: 12px 14px; background: #1a1e2c; border: 1px solid transparent; border-radius: 5px; font-size: 13px; display: flex; align-items: center; justify-content: space-between; gap: 12px; cursor: pointer; text-align: right; }
 .sheet-row > span:first-child { min-width: 0; overflow-wrap: anywhere; }
-.sheet-row.active { border-color: #ab8cff66; color: var(--accent); background: #211b36; }
+.sheet-row.active { border-color: #ccdde166; color: var(--accent); background: #263039; }
 .sheet-pill { flex-shrink: 0; font-size: 10px; color: var(--text-dim); }
 .sheet-pill.direct { color: var(--accent); }
 .sheet-row i { margin-inline-end: 5px; }
@@ -911,7 +911,7 @@ video::cue { font-family: 'Tajawal', sans-serif; font-size: 90%; background: #00
 .series-detail-art { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; object-position: center 30%; }
 .series-detail-shade { position: absolute; inset: 0; background: linear-gradient(0deg, #11131d, #11131d70 42%, transparent); }
 .series-detail-info { position: absolute; inset: auto 22px 15px; }
-.series-source-tag { font-size: 10px; color: #baa3ff; }
+.series-source-tag { font-size: 10px; color: var(--accent); }
 .series-detail-info h4 { font-size: 26px; line-height: 1.4; font-weight: 700; max-width: 90%; margin: 6px 0 10px; text-wrap: balance; }
 .series-detail-meta { display: flex; gap: 12px; font-size: 11px; color: var(--text-sub); }
 .series-detail-meta span + span:before { content: '·'; margin-inline-end: 12px; }
@@ -922,7 +922,7 @@ video::cue { font-family: 'Tajawal', sans-serif; font-size: 90%; background: #00
 .series-episode-heading > span { display: none; }
 .season-tabs { display: flex; gap: 5px; overflow-x: auto; flex: 0 0 auto; padding-bottom: 4px; }
 .season-tab { flex: 0 0 auto; min-height: 38px; padding: 7px 13px; border: 1px solid #ffffff1c; border-radius: 4px; color: var(--text-sub); font-size: 11px; }
-.season-tab.active { color: var(--text-main); background: #2b2342; border-color: #ffffff30; }
+.season-tab.active { color: var(--text-main); background: #29343e; border-color: #ffffff30; }
 .sheet-content > .season-tabs { padding-inline: 22px; margin-bottom: 12px; }
 .episode-toolbar { display: flex; flex-direction: column; gap: 10px; }
 .episode-search { flex: 0 0 auto; display: flex; align-items: center; gap: 9px; background: #ffffff05; border: 1px solid #ffffff15; border-radius: 5px; color: var(--text-dim); padding: 0 12px; min-height: 42px; }
@@ -1176,18 +1176,18 @@ html[data-display='tv'] .sheet-episode-grid .episode-copy strong { font-size:19p
 html[data-display='tv'] .sheet-episode-grid .episode-card { min-height:105px;gap:12px }
 
 /* Lively feedback, with one restrained accent shared by all device surfaces. */
-.brand-mark { width:30px;height:30px;display:grid;place-items:center;border-radius:10px;background:linear-gradient(135deg,#b99bff,#7752e7);color:#fff;font-size:13px;box-shadow:0 4px 18px var(--accent-glow) }
-.brand-text>span { color:#baa6ef }
+.brand-mark { width:30px;height:30px;display:grid;place-items:center;border-radius:9px;background:#e1e9e9;color:#11171d;font-size:12px }
+.brand-text>span { color:var(--text-sub) }
 .spotlight-card { border-radius:17px;border:1px solid #ffffff0b;isolation:isolate }
 .spotlight-img { transition:opacity .35s ease,transform .7s ease-out }
 .spotlight-card:hover .spotlight-img { transform:scale(1.025) }
-.spotlight-tag { color:#ccb9ff }
+.spotlight-tag { color:var(--accent) }
 .btn-play-hero { border-radius:12px;box-shadow:0 5px 24px #0003;transition:transform .16s,background .16s }
 .btn-play-hero:active { transform:scale(.97) }
 .btn-icon-hero { border-radius:12px;background:#ffffff0b;transition:background .18s,transform .18s }
 .source-options { gap:5px;background:var(--bg-surface);padding:4px;border-radius:13px }
 .source-option { border-radius:10px;transition:background .2s,color .2s,transform .15s }
-.source-option.active { background:#35264f;border-color:#7955b1;color:#f7f2ff }
+.source-option.active { background:#29343e;border-color:#52636f;color:var(--text-main) }
 .source-option:active { transform:scale(.96) }
 .series-tile-thumb,.ep-tile-poster { border-radius:11px }
 .series-tile,.ep-tile { animation:card-reveal .28s ease-out both }
@@ -1197,17 +1197,17 @@ html[data-display='tv'] .sheet-episode-grid .episode-card { min-height:105px;gap
 .series-tile:nth-child(5),.ep-tile:nth-child(5) { animation-delay:100ms }
 @keyframes card-reveal { from{opacity:0}to{opacity:1} }
 .catalogue-sources { display:flex;gap:5px;flex-wrap:wrap;margin-top:7px;min-height:17px }
-.provider-tag { display:inline-flex;align-items:center;gap:4px;padding:2px 6px;border-radius:5px;background:#ffffff08;color:#929ab5;font-size:9px;line-height:1.4 }
-.provider-tag:before { content:'';width:4px;height:4px;border-radius:50%;background:#a68bff }
+.provider-tag { display:inline-flex;align-items:center;gap:4px;padding:2px 6px;border-radius:5px;background:#ffffff08;color:var(--text-sub);font-size:10px;line-height:1.4 }
+.provider-tag:before { content:'';width:4px;height:4px;border-radius:50%;background:#ccbd9e }
 .provider-cinemana:before { background:#65cbbc }
 .sheet-scrim { animation:scrim-reveal .18s ease-out }
 .sheet-panel { border-radius:20px 20px 0 0;animation:sheet-reveal .22s cubic-bezier(.2,.8,.2,1) }
 @keyframes scrim-reveal { from{background:#0000}to{background:#000a} }
 @keyframes sheet-reveal { from{opacity:.4;transform:translateY(12px)}to{opacity:1;transform:none} }
 .episode-card { border-radius:11px;transition:background .18s,border-color .18s;animation:card-reveal .2s ease-out }
-.episode-card.active { background:linear-gradient(110deg,#2b2043,#151624);box-shadow:inset -2px 0 #ab8cff }
+.episode-card.active { background:var(--accent-soft);box-shadow:inset -2px 0 var(--accent) }
 .episode-art { border-radius:8px }
-.ctrl-circle.primary { background:#ab8cff;color:white;box-shadow:0 5px 30px #9d70ff28 }
+.ctrl-circle.primary { background:#e2eaeb;color:#11171d;box-shadow:0 3px 18px #0003 }
 .ctrl-circle { transition:transform .14s,background .14s }
 .ctrl-circle:active { transform:scale(.93) }
 .seek-step { position:absolute;font-size:9px;font-weight:700;bottom:8px;line-height:1 }
@@ -1216,13 +1216,13 @@ html[data-display='tv'] .sheet-episode-grid .episode-card { min-height:105px;gap
 .scrub-current,.scrub-loaded { left:0;right:auto }
 .scrub-pin { left:0;right:auto;transform:translate(-50%,-50%) }
 .scrub-line:focus-visible { outline-offset:8px }
-.gesture-pill { animation:feedback-in .14s ease-out;border-color:#ab8cff40 }
+.gesture-pill { animation:feedback-in .14s ease-out;border-color:#ccdde140 }
 @keyframes feedback-in { from{opacity:0;scale:.95}to{opacity:1;scale:1} }
 .search-source-status { color:var(--text-sub);font-size:12px;margin-bottom:16px;min-height:20px }
 .series-provider-picker { display:flex;align-items:center;gap:8px;padding:8px 22px 18px;flex:0 0 auto;flex-wrap:wrap }
 .series-provider-picker>span { font-size:11px;color:var(--text-dim);margin-inline-end:auto }
 .series-provider-option { min-height:40px;padding:8px 16px;border:1px solid #ffffff20;border-radius:8px;color:var(--text-sub);font-size:12px }
-.series-provider-option.active { color:#e2d6ff;background:#34254d;border-color:#8d6ac0 }
+.series-provider-option.active { color:var(--text-main);background:#29343e;border-color:#647581 }
 .controls-help-link { display:flex;gap:10px;align-items:center;width:100%;min-height:52px;margin-top:20px;color:var(--text-sub);font-size:13px;border-top:1px solid var(--line-subtle);padding-top:10px }
 .controls-help-link>.keycap { margin-inline-start:auto }
 .keycap,kbd { border:1px solid #ffffff25;background:var(--bg-elevated);border-radius:5px;padding:3px 8px;font-size:12px;color:var(--text-main);font-family:inherit }
@@ -1246,21 +1246,77 @@ html[data-display='tv'] .sheet-content:has(.series-provider-picker) .sheet-episo
 html[data-display='tv'] .seek-step { font-size:15px;bottom:14px }
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}.spotlight-card:hover .spotlight-img{transform:none}}
 
-/* 120 FPS Fluidity & High Refresh Optimizations */
-.h-carousel, .media-grid {
-  contain: layout paint;
-  will-change: transform;
-}
-.ep-tile, .series-tile {
-  transform: translate3d(0, 0, 0);
-  backface-visibility: hidden;
-  transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.2s ease;
-}
-.ep-tile:hover, .series-tile:hover {
-  transform: translateY(-3px) scale(1.02);
-}
-.content-canvas {
-  scroll-behavior: smooth;
-  -webkit-overflow-scrolling: touch;
-  contain: content;
-}
+/* Rust UI: one catalogue at a time. Only floating surfaces blur content. */
+.top-nav { inset:0 0 auto;height:calc(68px + var(--safe-top));padding-inline:24px;background:var(--bg-glass-dock);border-bottom:0 }
+.nav-tools { display:flex;gap:5px }
+.brand-text { font-size:25px;letter-spacing:-.6px }
+.brand-mark { width:28px;height:28px;border-radius:8px }
+.catalogue-tabs { position:absolute;inset:calc(68px + var(--safe-top)) 0 auto;z-index:35;height:56px;display:flex;align-items:stretch;padding-inline:24px;gap:28px;border-bottom:1px solid var(--line-subtle);background:var(--bg-glass-dock) }
+.catalogue-tabs button { position:relative;font-size:17px;font-weight:500;color:var(--text-dim);padding:0 2px;min-width:68px;transition:color .16s }
+.catalogue-tabs button.active { color:var(--text-main) }
+.catalogue-tabs button.active:after { content:'';position:absolute;inset:auto 0 -1px;height:2px;background:var(--accent);border-radius:2px }
+.content-canvas { inset:calc(124px + var(--safe-top)) 0 0;padding:0 0 calc(28px + var(--safe-bottom));scroll-behavior:auto;contain:layout style;-webkit-overflow-scrolling:touch }
+.source-switcher { padding:20px 24px 22px;gap:12px }
+.source-options { margin-inline-start:0;background:#ffffff04;padding:3px;border:1px solid var(--line-subtle) }
+.source-option { min-height:34px;padding:6px 14px;font-size:12px }
+.source-option.active { border-color:#ffffff24;background:#ffffff10 }
+.source-label { font-size:12px;color:var(--text-dim) }
+html[data-view='movies'] .source-options { display:none }
+.feed-section { padding-inline:24px;margin-bottom:24px }
+.section-headline { margin-bottom:20px;align-items:baseline }
+.section-headline h1 { font-size:21px;font-weight:500 }
+.section-headline .headline-muted { font-size:12px;font-variant-numeric:tabular-nums }
+.media-grid { grid-template-columns:repeat(2,minmax(0,1fr));gap:26px 16px;contain:none }
+.series-tile { display:block;text-align:start;color:inherit;animation:card-reveal .16s ease-out both;transition:transform .16s ease;min-width:0;border-radius:10px }
+.poster-frame { display:block;aspect-ratio:2/3;overflow:hidden;border-radius:10px;background:var(--bg-surface);border:1px solid #ffffff0b }
+.series-tile-thumb { width:100%;height:100%;aspect-ratio:2/3;border-radius:0;object-fit:cover }
+.series-tile-body { display:block;padding:11px 1px 0 }
+.series-tile-title { display:-webkit-box;font-size:14px;font-weight:500;line-height:1.55 }
+.series-tile-sub { display:block;font-size:11px;line-height:1.4;color:var(--text-dim);margin-top:4px;min-height:0 }
+.series-tile-sub:empty { display:none }
+.catalogue-sources { margin-top:6px;min-height:0 }
+.provider-tag { font-size:9px;padding:2px 5px;background:transparent;color:var(--text-dim) }
+.catalogue-pagination { display:flex;align-items:center;justify-content:center;flex-direction:column;gap:16px;padding:32px 0 14px }
+.catalogue-pagination p { color:var(--text-sub);font-size:12px;text-align:center;line-height:1.8 }
+.load-more-btn { display:inline-flex;align-items:center;justify-content:center;min-height:46px;min-width:160px;padding:11px 26px;border:1px solid #ffffff26;background:#ffffff08;color:var(--text-main);border-radius:11px;font:inherit;font-size:13px;text-decoration:none }
+.load-more-btn:disabled { opacity:.5;cursor:wait }
+.sheet-panel { background:var(--bg-glass);border:1px solid #ffffff20;border-radius:22px 22px 0 0;box-shadow:0 20px 80px #0006 }
+.sheet-scrim { background:#0008;animation:none }
+.sheet-panel:has(.series-detail-hero) { max-height:94%;padding-top:9px }
+.series-detail-hero { min-height:220px }
+.series-detail-poster { width:100%;height:100%;object-fit:cover;object-position:center 25% }
+.series-detail-story:empty { display:none }
+.series-detail-story { display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;padding-block:8px 0;margin-bottom:14px;line-height:1.8 }
+.series-detail-story.expanded { display:block }
+.story-expand { align-self:flex-start;min-height:38px;padding:5px 22px;font-size:12px;color:var(--accent);margin-top:-8px }
+.episode-card { animation:none;border-radius:10px;min-height:68px;padding:14px 10px }
+.episode-card.active { background:var(--accent-soft) }
+.sheet-content { overscroll-behavior:contain }
+.detail-loading { display:flex;align-items:center;justify-content:center;gap:12px;min-height:160px;color:var(--text-sub) }
+.player-bar-top,.player-bar-bottom { background:#090d14b8 }
+.player-sub-drawer { background:var(--bg-surface) }
+.gesture-pill,.action-capsule,.hud-circle-btn { background:#151d28d9;border:1px solid #ffffff1c }
+.controls-guide p { padding-block:10px;border-bottom:1px solid var(--line-subtle);font-size:14px;color:var(--text-sub) }
+.search-modal { inset:0;background:var(--bg-core) }
+.app-toast { position:absolute;z-index:160;bottom:calc(28px + var(--safe-bottom));left:50%;transform:translateX(-50%);width:max-content;max-width:90%;padding:12px 20px;background:#28333bf2;color:var(--text-main);border:1px solid #ffffff25;border-radius:12px;font-size:13px;box-shadow:0 8px 30px #0005 }
+.boot-status { padding:25px;color:var(--text-sub) }
+.library-wrap { padding-top:28px }
+.library-wrap .segmented-control { margin-bottom:20px }
+@supports(backdrop-filter:blur(1px)) { .top-nav,.catalogue-tabs { backdrop-filter:blur(14px) saturate(1.1) }.sheet-panel { backdrop-filter:blur(18px) saturate(1.1) } }
+@supports(content-visibility:auto) { .series-tile { content-visibility:auto;contain-intrinsic-size:auto 270px } }
+@media(hover:hover)and(pointer:fine){.series-tile:hover { transform:translateY(-3px) }.series-tile:hover .poster-frame { border-color:#ffffff38 }}
+@media(min-width:620px){.media-grid { grid-template-columns:repeat(4,minmax(0,1fr));gap:28px 20px }.sheet-panel { border-radius:22px }.top-nav,.catalogue-tabs { padding-inline:40px }.feed-section,.source-switcher { padding-inline:40px }}
+@media(min-width:1024px){.top-nav,.catalogue-tabs { padding-inline:max(48px,calc((100vw - 1440px)/2)) }.content-canvas { inset-inline:0;padding-inline:max(0px,calc((100vw - 1440px)/2)) }.feed-section,.source-switcher { padding-inline:48px }.media-grid { grid-template-columns:repeat(6,minmax(0,1fr));gap:30px 22px }.search-scroll-area { padding-inline:max(48px,calc((100vw - 1344px)/2)) }.search-topbar { max-width:900px }}
+html[data-display='tv'] .top-nav { height:90px;padding-inline:56px }
+html[data-display='tv'] .catalogue-tabs { top:90px;height:68px;padding-inline:56px;gap:45px }
+html[data-display='tv'] .catalogue-tabs button { font-size:25px;min-width:115px }
+html[data-display='tv'] .content-canvas { inset:158px 0 0;padding:0 8px 40px }
+html[data-display='tv'] .media-grid { grid-template-columns:repeat(6,minmax(0,1fr));gap:30px 24px }
+html[data-display='tv'] .section-headline h1 { font-size:29px }
+html[data-display='tv'] .catalogue-pagination p { font-size:18px }
+html[data-display='tv'] .load-more-btn { min-height:58px;font-size:20px }
+html[data-display='tv'] .sheet-panel { backdrop-filter:none;background:#131a22f5 }
+html[data-display='tv'] .series-tile-title { font-size:19px }
+html[data-display='tv'] .provider-tag { font-size:13px }
+@media(prefers-reduced-transparency:reduce){.top-nav,.catalogue-tabs,.sheet-panel { backdrop-filter:none;background:var(--bg-surface) }}
+@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
