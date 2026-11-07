@@ -13,6 +13,7 @@ import android.os.Build
 import android.os.Bundle
 import android.util.Log
 import android.util.Rational
+import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
@@ -57,7 +58,11 @@ class MainActivity : AppCompatActivity() {
 
     inner class KrmziBridge {
         @JavascriptInterface
-        fun isTelevision(): Boolean = (resources.configuration.uiMode and Configuration.UI_MODE_TYPE_MASK) == Configuration.UI_MODE_TYPE_TELEVISION
+        fun isTelevision(): Boolean {
+            val uiMode = (resources.configuration.uiMode and Configuration.UI_MODE_TYPE_MASK) == Configuration.UI_MODE_TYPE_TELEVISION
+            val leanback = packageManager.hasSystemFeature(android.content.pm.PackageManager.FEATURE_LEANBACK)
+            return uiMode || leanback
+        }
 
         @JavascriptInterface
         fun setVideoPlaying(playing: Boolean) {
@@ -132,7 +137,7 @@ class MainActivity : AppCompatActivity() {
                 val conn = (url.openConnection() as HttpURLConnection).apply {
                     connectTimeout = 8_000
                     readTimeout = 8_000
-                    setRequestProperty("User-Agent", "KrmziApp-Android")
+                    setRequestProperty("User-Agent", "ZOET-Android")
                     setRequestProperty("Accept", "application/vnd.github.v3+json")
                 }
                 connection = conn
@@ -219,13 +224,30 @@ class MainActivity : AppCompatActivity() {
 
                     Thread {
                         try {
-                            val conn = (URL(downloadUrl).openConnection() as HttpURLConnection).apply {
-                                connectTimeout = 15_000
-                                readTimeout = 60_000
-                                instanceFollowRedirects = true
-                                setRequestProperty("User-Agent", "ZOET-Android")
+                            var currentUrl = downloadUrl
+                            var finalConn: HttpURLConnection? = null
+                            var redirects = 0
+                            while (redirects < 5) {
+                                val conn = (URL(currentUrl).openConnection() as HttpURLConnection).apply {
+                                    connectTimeout = 15_000
+                                    readTimeout = 60_000
+                                    instanceFollowRedirects = true
+                                    setRequestProperty("User-Agent", "ZOET-Android")
+                                }
+                                val code = conn.responseCode
+                                if (code in 300..399) {
+                                    val location = conn.getHeaderField("Location") ?: break
+                                    currentUrl = location
+                                    conn.disconnect()
+                                    redirects++
+                                } else {
+                                    finalConn = conn
+                                    break
+                                }
                             }
-                            if (conn.responseCode in 200..299) {
+
+                            val conn = finalConn
+                            if (conn != null && conn.responseCode in 200..299) {
                                 val updateFile = File(cacheDir, "zoet-update.apk")
                                 if (updateFile.exists()) updateFile.delete()
                                 conn.inputStream.use { input ->
@@ -273,11 +295,13 @@ class MainActivity : AppCompatActivity() {
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 if (!packageManager.canRequestPackageInstalls()) {
+                    Toast.makeText(this, "يرجى السماح بتثبيت التطبيقات لتحديث ZOET", Toast.LENGTH_LONG).show()
                     val settingsIntent = Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES).apply {
                         data = Uri.parse("package:$packageName")
                         addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                     }
                     startActivity(settingsIntent)
+                    return
                 }
             }
             val apkUri = FileProvider.getUriForFile(this, "$packageName.fileprovider", file)
@@ -289,12 +313,16 @@ class MainActivity : AppCompatActivity() {
             startActivity(installIntent)
         } catch (e: Exception) {
             Log.e(TAG, "Install failed: ${e.message}", e)
-            fallbackBrowserDownload(file.absolutePath)
+            Toast.makeText(this, "تعذر فتح مثبت الحزمة تلقائياً", Toast.LENGTH_SHORT).show()
         }
     }
 
     private fun fallbackBrowserDownload(url: String) {
         try {
+            if (!url.startsWith("http://") && !url.startsWith("https://")) {
+                Toast.makeText(this, "تعذر تثبيت حزمة التحديث", Toast.LENGTH_SHORT).show()
+                return
+            }
             val uri = Uri.parse(url)
             startActivity(Intent(Intent.ACTION_VIEW, uri).apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -337,6 +365,7 @@ class MainActivity : AppCompatActivity() {
         configureWebView()
         setupBackHandler()
         webView.loadUrl(APP_URL)
+        webView.requestFocus()
     }
 
     private fun configureWindow() {
@@ -349,6 +378,7 @@ class MainActivity : AppCompatActivity() {
                 WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,
                 WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED
             )
+            @Suppress("DEPRECATION")
             window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
 
             // Utilize full display under cutout/notch
@@ -392,6 +422,8 @@ class MainActivity : AppCompatActivity() {
             overScrollMode = View.OVER_SCROLL_NEVER
             isVerticalScrollBarEnabled = false
             isHorizontalScrollBarEnabled = false
+            isFocusable = true
+            isFocusableInTouchMode = true
         }
     }
 
@@ -569,7 +601,7 @@ class MainActivity : AppCompatActivity() {
                 }
 
                 // Video players and CDNs live in subframes; never block those.
-                if (request?.isForMainFrame == false) return false
+                if (!request.isForMainFrame) return false
 
                 Log.d(TAG, "Prevented external navigation on main frame: $url")
                 return true
@@ -656,8 +688,10 @@ class MainActivity : AppCompatActivity() {
     }
 
     /* ------------------------------------------------------------------ */
-    /*  Navigation                                                         */
+    /*  Navigation & Key Dispatch                                          */
     /* ------------------------------------------------------------------ */
+
+    private var lastBackPressTime: Long = 0L
 
     private fun setupBackHandler() {
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
@@ -674,6 +708,8 @@ class MainActivity : AppCompatActivity() {
                 webView.evaluateJavascript(
                     """
                     (function() {
+                        if (window.zoetHandleBack && window.zoetHandleBack()) return true;
+                        if (window.krmziHandleBack && window.krmziHandleBack()) return true;
                         if (window.krmziIsSheetOpen && window.krmziIsSheetOpen()) {
                             window.krmziCloseSheet();
                             return true;
@@ -691,12 +727,47 @@ class MainActivity : AppCompatActivity() {
                     """.trimIndent()
                 ) { result ->
                     if (result != "true") {
-                        isEnabled = false
-                        onBackPressedDispatcher.onBackPressed()
+                        val currentTime = System.currentTimeMillis()
+                        if (currentTime - lastBackPressTime < 2000L) {
+                            finish()
+                        } else {
+                            lastBackPressTime = currentTime
+                            Toast.makeText(this@MainActivity, "اضغط مرة أخرى للخروج", Toast.LENGTH_SHORT).show()
+                        }
                     }
                 }
             }
         })
+    }
+
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (event.action == KeyEvent.ACTION_DOWN) {
+            when (event.keyCode) {
+                KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE,
+                KeyEvent.KEYCODE_MEDIA_PLAY,
+                KeyEvent.KEYCODE_MEDIA_PAUSE -> {
+                    if (isVideoPlaying && ::webView.isInitialized) {
+                        webView.evaluateJavascript("if (window.zoetTogglePlayer) window.zoetTogglePlayer(); else if (window.krmziTogglePlayer) window.krmziTogglePlayer();", null)
+                        return true
+                    }
+                }
+                KeyEvent.KEYCODE_MEDIA_FAST_FORWARD,
+                KeyEvent.KEYCODE_MEDIA_STEP_FORWARD -> {
+                    if (isVideoPlaying && ::webView.isInitialized) {
+                        webView.evaluateJavascript("if (window.zoetSeekPlayer) window.zoetSeekPlayer(10); else if (window.krmziSeekPlayer) window.krmziSeekPlayer(10);", null)
+                        return true
+                    }
+                }
+                KeyEvent.KEYCODE_MEDIA_REWIND,
+                KeyEvent.KEYCODE_MEDIA_STEP_BACKWARD -> {
+                    if (isVideoPlaying && ::webView.isInitialized) {
+                        webView.evaluateJavascript("if (window.zoetSeekPlayer) window.zoetSeekPlayer(-10); else if (window.krmziSeekPlayer) window.krmziSeekPlayer(-10);", null)
+                        return true
+                    }
+                }
+            }
+        }
+        return super.dispatchKeyEvent(event)
     }
 
     /* ------------------------------------------------------------------ */

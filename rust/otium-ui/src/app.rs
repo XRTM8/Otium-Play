@@ -45,7 +45,8 @@ impl Default for State {
     fn default() -> Self {
         Self {
             view: "series".into(),
-            source: storage("otium_source")
+            source: storage("zoet_source")
+                .or_else(|| storage("otium_source"))
                 .filter(|s| ["all", "krmzi", "cinemana"].contains(&s.as_str()))
                 .unwrap_or("all".into()),
             main: Listing::default(),
@@ -824,6 +825,7 @@ fn click(event: Event) {
                 abort.abort();
             }
         });
+        store("zoet_source", &source);
         store("otium_source", &source);
         update_source();
         load_listing(false, true);
@@ -909,7 +911,8 @@ fn update_source() {
     }
 }
 fn apply_display() {
-    let tv = storage("otium_display").as_deref() == Some("tv")
+    let saved_display = storage("zoet_display").or_else(|| storage("otium_display"));
+    let tv = saved_display.as_deref() == Some("tv")
         || native_bool("isTelevision")
         || window()
             .navigator()
@@ -935,7 +938,7 @@ fn apply_display() {
         .get_element_by_id("displayModeSelect")
         .and_then(|element| element.dyn_into::<web_sys::HtmlSelectElement>().ok())
     {
-        select.set_value(&storage("otium_display").unwrap_or("auto".into()));
+        select.set_value(&saved_display.unwrap_or("auto".into()));
     }
 }
 fn native_bool(method: &str) -> bool {
@@ -1193,6 +1196,7 @@ pub fn init() {
         let select = el("displayModeSelect")
             .dyn_into::<web_sys::HtmlSelectElement>()
             .unwrap();
+        store("zoet_display", &select.value());
         store("otium_display", &select.value());
         apply_display();
     });
@@ -1213,11 +1217,14 @@ pub fn init() {
         keyboard(event.unchecked_into())
     });
     listen(window().as_ref(), "resize", |_| apply_display());
-    // Native Android back dispatch uses Rust exports, not a JavaScript app shim.
+    // Native Android back dispatch and media controls use Rust exports.
     for (name, kind) in [
         ("krmziClosePlayer", 0),
         ("krmziCloseSheet", 1),
         ("krmziCloseSearch", 2),
+        ("zoetClosePlayer", 0),
+        ("zoetCloseSheet", 1),
+        ("zoetCloseSearch", 2),
     ] {
         let closure = wasm_bindgen::closure::Closure::wrap(Box::new(move || match kind {
             0 => player::close(),
@@ -1231,12 +1238,57 @@ pub fn init() {
         ("krmziIsPlayerOpen", 0),
         ("krmziIsSheetOpen", 1),
         ("krmziIsSearchOpen", 2),
+        ("zoetIsPlayerOpen", 0),
+        ("zoetIsSheetOpen", 1),
+        ("zoetIsSearchOpen", 2),
     ] {
         let closure = wasm_bindgen::closure::Closure::wrap(Box::new(move || match kind {
             0 => player::is_open(),
             1 => !el("sheetBackdrop").class_list().contains("hidden"),
             _ => !el("searchOverlay").class_list().contains("hidden"),
         }) as Box<dyn FnMut() -> bool>);
+        let _ = Reflect::set(window().as_ref(), &name.into(), closure.as_ref());
+        closure.forget();
+    }
+    for name in ["krmziHandleBack", "zoetHandleBack"] {
+        let closure = wasm_bindgen::closure::Closure::wrap(Box::new(move || {
+            if !el("sheetBackdrop").class_list().contains("hidden") {
+                close_sheet();
+                return true;
+            }
+            if player::is_open() {
+                player::close();
+                return true;
+            }
+            if !el("searchOverlay").class_list().contains("hidden") {
+                search_close();
+                return true;
+            }
+            let current_view = STATE.with(|s| s.borrow().view.clone());
+            if current_view != "series" {
+                set_view("series");
+                return true;
+            }
+            false
+        }) as Box<dyn FnMut() -> bool>);
+        let _ = Reflect::set(window().as_ref(), &name.into(), closure.as_ref());
+        closure.forget();
+    }
+    for name in ["krmziTogglePlayer", "zoetTogglePlayer"] {
+        let closure = wasm_bindgen::closure::Closure::wrap(Box::new(move || {
+            if player::is_open() {
+                player::toggle();
+            }
+        }) as Box<dyn FnMut()>);
+        let _ = Reflect::set(window().as_ref(), &name.into(), closure.as_ref());
+        closure.forget();
+    }
+    for name in ["krmziSeekPlayer", "zoetSeekPlayer"] {
+        let closure = wasm_bindgen::closure::Closure::wrap(Box::new(move |secs: f64| {
+            if player::is_open() {
+                player::seek(secs);
+            }
+        }) as Box<dyn FnMut(f64)>);
         let _ = Reflect::set(window().as_ref(), &name.into(), closure.as_ref());
         closure.forget();
     }

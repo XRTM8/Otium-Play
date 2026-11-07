@@ -5,7 +5,7 @@ const SHELL=['./','./index.html','./styles.css?v=2.0.0','./manifest.json','./was
 self.addEventListener('install',event=>event.waitUntil(caches.open(CACHE).then(cache=>cache.addAll(SHELL)).then(()=>self.skipWaiting())));
 self.addEventListener('activate',event=>event.waitUntil((async()=>{
   const names=await caches.keys();
-  await Promise.all(names.filter(name=>(name.startsWith('krmzi-')||name.startsWith('otium-shell-'))&&name!==CACHE).map(name=>caches.delete(name)));
+  await Promise.all(names.filter(name=>(name.startsWith('krmzi-')||name.startsWith('otium-shell-')||name.startsWith('zoet-shell-'))&&name!==CACHE).map(name=>caches.delete(name)));
   await self.clients.claim();
 })()));
 self.addEventListener('fetch',event=>{

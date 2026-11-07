@@ -22,6 +22,8 @@
   --ease-bounce: var(--ease-spring);
   --safe-top: env(safe-area-inset-top, 0px);
   --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
 }
 * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
 html, body { width: 100%; height: 100%; overflow: hidden; background: var(--bg-core); color: var(--text-main); }
@@ -506,7 +508,7 @@ video::-webkit-media-controls-panel {
   left: 0;
   right: 0;
   z-index: 15;
-  padding: calc(var(--safe-top) + 8px) 14px 10px 14px;
+  padding: calc(var(--safe-top) + 8px) calc(var(--safe-left) + 14px) 10px calc(var(--safe-right) + 14px);
   background: linear-gradient(180deg, rgba(0,0,0,0.85) 0%, transparent 100%);
   display: flex;
   align-items: center;
@@ -598,7 +600,7 @@ video::-webkit-media-controls-panel {
   left: 0;
   right: 0;
   z-index: 15;
-  padding: 6px 14px 8px 14px;
+  padding: 6px calc(var(--safe-left) + 14px) calc(var(--safe-bottom) + 8px) calc(var(--safe-right) + 14px);
   background: linear-gradient(0deg, rgba(0,0,0,0.85) 0%, transparent 100%);
   display: flex;
   flex-direction: column;

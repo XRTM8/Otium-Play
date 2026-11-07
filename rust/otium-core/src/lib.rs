@@ -19,7 +19,7 @@ use url::Url;
 
 const ORIGIN: &str = "https://krmzi.org";
 const CINEMANA: &str = "https://cinemana.shabakaty.com/api/android/";
-const USER_AGENT: &str = "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Otium/2.0";
+const USER_AGENT: &str = "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 ZOET/2.0";
 const MAX_TEXT: usize = 8 * 1024 * 1024;
 const MAX_CACHE: usize = 180;
 type Result<T> = std::result::Result<T, String>;

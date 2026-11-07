@@ -25,13 +25,16 @@ fn main() {
         return;
     }
     let port = env::var("PORT").unwrap_or_else(|_| "3000".into());
-    let bind = env::var("OTIUM_BIND").unwrap_or_else(|_| format!("127.0.0.1:{port}"));
-    let public = env::var_os("OTIUM_PUBLIC")
+    let bind = env::var("ZOET_BIND")
+        .or_else(|_| env::var("OTIUM_BIND"))
+        .unwrap_or_else(|_| format!("127.0.0.1:{port}"));
+    let public = env::var_os("ZOET_PUBLIC")
+        .or_else(|| env::var_os("OTIUM_PUBLIC"))
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../public"));
     let public = public
         .canonicalize()
-        .expect("OTIUM_PUBLIC must point to the public directory");
+        .expect("ZOET_PUBLIC or OTIUM_PUBLIC must point to the public directory");
     let listener = TcpListener::bind(&bind).expect("Unable to bind server");
     println!("ZOET by Otium Rust server: http://{bind}");
     let active = Arc::new(AtomicUsize::new(0));
