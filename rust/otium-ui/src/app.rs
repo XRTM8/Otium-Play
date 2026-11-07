@@ -1196,7 +1196,7 @@ fn check_updates(manual: bool) {
             Ok(data) => {
                 let version = s(&data, "tag_name");
                 let remote = parse_version(&version);
-                let local = parse_version("2.3.0");
+                let local = parse_version("2.4.0");
                 if remote.is_empty() || remote <= local {
                     if manual {
                         notify("أنت تستخدم آخر إصدار");
@@ -1255,7 +1255,7 @@ pub fn init() {
     }
     apply_display();
     update_source();
-    text("installedVersionText", "v2.3.0");
+    text("installedVersionText", "v2.4.0");
     on("tabSeries", "click", |_| set_view("series"));
     on("tabMovies", "click", |_| set_view("movies"));
     on("openLibraryBtn", "click", |_| set_view("library"));
