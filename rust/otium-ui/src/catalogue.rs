@@ -193,14 +193,44 @@ fn season(value: &Value) -> String {
     }
 }
 
+pub fn clean_title(title: &str) -> String {
+    let mut clean = title.trim();
+    for prefix in ["مسلسل ", "مسلسلات ", "فيلم ", "افلام "] {
+        if clean.starts_with(prefix) {
+            clean = &clean[prefix.len()..];
+            break;
+        }
+    }
+    if let Some((base, _)) = clean.split_once(" - قرمزي") {
+        clean = base;
+    }
+    if let Some((base, _)) = clean.split_once(" مترجم") {
+        clean = base;
+    }
+    if let Some((base, _)) = clean.split_once(" مدبلج") {
+        clean = base;
+    }
+    clean.trim().to_owned()
+}
+
 fn titles(value: &Value) -> Vec<String> {
     let mut titles = vec![normalized(&field(value, "title"))];
+    let clean = clean_title(&field(value, "title"));
+    let norm_clean = normalized(&clean);
+    if !norm_clean.is_empty() {
+        titles.push(norm_clean);
+    }
     if let Some(aliases) = value["aliases"].as_array() {
         titles.extend(aliases.iter().filter_map(Value::as_str).map(normalized));
     }
     if let Some(offers) = value["offers"].as_array() {
         for offer in offers {
             titles.push(normalized(&field(offer, "title")));
+            let clean_offer = clean_title(&field(offer, "title"));
+            let norm_offer = normalized(&clean_offer);
+            if !norm_offer.is_empty() {
+                titles.push(norm_offer);
+            }
             if let Some(aliases) = offer["aliases"].as_array() {
                 titles.extend(aliases.iter().filter_map(Value::as_str).map(normalized));
             }
@@ -395,6 +425,30 @@ pub fn find_counterpart(item: &Value, candidates: &[Value]) -> Option<Value> {
     let matches = merge(&matches, "cinemana");
     if matches.len() == 1 {
         matches.into_iter().next()
+    } else if matches.len() > 1 && !year.is_empty() {
+        matches.into_iter().find(|m| field(m, "year") == year)
+    } else if matches.is_empty() {
+        let fuzzy: Vec<Value> = candidates
+            .iter()
+            .filter(|candidate| {
+                kind(candidate) == "series"
+                    && edition(item) == edition(candidate)
+                    && compatible_year(&year, &field(candidate, "year"))
+                    && self::titles(candidate).iter().any(|ct| {
+                        titles.iter().any(|t| {
+                            (t.len() >= 4 && ct.contains(t.as_str()))
+                                || (ct.len() >= 4 && t.contains(ct.as_str()))
+                        })
+                    })
+            })
+            .cloned()
+            .collect();
+        let fuzzy = merge(&fuzzy, "cinemana");
+        if fuzzy.len() == 1 {
+            fuzzy.into_iter().next()
+        } else {
+            None
+        }
     } else {
         None
     }

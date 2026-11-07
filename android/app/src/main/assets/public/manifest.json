@@ -1,11 +1,11 @@
 {
-  "name": "ZOET by Otium",
+  "name": "ZOET",
   "short_name": "ZOET",
   "description": "كل حكاية، بمكان واحد — أفلام ومسلسلات من مصادر متعددة",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#090c10",
-  "theme_color": "#090c10",
+  "background_color": "#000000",
+  "theme_color": "#000000",
   "dir": "rtl",
   "lang": "ar",
   "icons": [

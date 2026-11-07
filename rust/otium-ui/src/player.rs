@@ -1139,20 +1139,39 @@ fn discover(source: String) {
         begin_switch(&format!("البحث في {}", source_name(&source)));
     spawn_local(async move {
         let signal = controller.as_ref().map(|c| c.signal());
-        let result = api::call_with_signal(
-            "/api/search",
-            &[("q", title)],
-            Some(&source),
-            signal.as_ref(),
-        )
-        .await;
-        if !switch_current(session, generation, &controller) {
-            return;
+        let clean = catalogue::clean_title(&title);
+        let mut queries = vec![clean.clone()];
+        if clean != title && !title.is_empty() {
+            queries.push(title.clone());
         }
-        match result.ok().and_then(|v|catalogue::find_counterpart(&identity,&rows(&v,"results"))) {
-            Some(candidate)=>switch_provider(s(&candidate,"url")),
-            None=>app::open_sheet("ما لقينا تطابقاً مؤكداً","<p class=\"empty-note\">المسلسل غير متاح أو اسمه مختلف في المصدر الآخر. المشاهدة الحالية مستمرة.</p>"),
+        if let Some(aliases) = identity["aliases"].as_array() {
+            for a in aliases.iter().filter_map(Value::as_str) {
+                let clean_a = catalogue::clean_title(a);
+                if !clean_a.is_empty() && !queries.contains(&clean_a) {
+                    queries.push(clean_a);
+                }
+            }
         }
+        for q in queries {
+            let result = api::call_with_signal(
+                "/api/search",
+                &[("q", q)],
+                Some(&source),
+                signal.as_ref(),
+            )
+            .await;
+            if !switch_current(session, generation, &controller) {
+                return;
+            }
+            if let Some(candidate) = result.ok().and_then(|v| catalogue::find_counterpart(&identity, &rows(&v, "results"))) {
+                switch_provider(s(&candidate, "url"));
+                return;
+            }
+        }
+        app::open_sheet(
+            "ما لقينا تطابقاً مؤكداً",
+            "<p class=\"empty-note\">المسلسل غير متاح أو اسمه مختلف في المصدر الآخر. المشاهدة الحالية مستمرة.</p>",
+        );
     });
 }
 fn switch_provider(url: String) {
