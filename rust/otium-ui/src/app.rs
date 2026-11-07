@@ -1114,6 +1114,11 @@ fn remote_focus(event: &KeyboardEvent) {
     if player::is_open() && el("sheetBackdrop").class_list().contains("hidden") {
         return;
     }
+    let is_tv = document()
+        .document_element()
+        .and_then(|e| e.get_attribute("data-display"))
+        .as_deref()
+        == Some("tv");
     let root = if !el("sheetBackdrop").class_list().contains("hidden") {
         el("sheetBackdrop")
     } else if !el("searchOverlay").class_list().contains("hidden") {
@@ -1130,6 +1135,7 @@ fn remote_focus(event: &KeyboardEvent) {
             n.offset_height() > 0
                 && !n.has_attribute("disabled")
                 && n.closest(".hidden").ok().flatten().is_none()
+                && !(is_tv && n.id() == "sheetEpisodeSearch")
         })
         .collect::<Vec<_>>();
     let current = document().active_element();
@@ -1141,7 +1147,7 @@ fn remote_focus(event: &KeyboardEvent) {
         if let Some(first) = nodes.first() {
             event.prevent_default();
             let _ = first.focus();
-            first.scroll_into_view_with_bool(false);
+            first.scroll_into_view_with_bool(event.key() == "ArrowUp");
         }
         return;
     };
@@ -1161,8 +1167,8 @@ fn remote_focus(event: &KeyboardEvent) {
             let dy = r.y() + r.height() / 2. - rect.y() - rect.height() / 2.;
             let p = if horizontal { dx } else { dy } * sign;
             let side = if horizontal { dy.abs() } else { dx.abs() };
-            if p > 2. {
-                Some((p + side * 3., node))
+            if p > 1.5 {
+                Some((p + side * 1.5, node))
             } else {
                 None
             }
@@ -1172,7 +1178,7 @@ fn remote_focus(event: &KeyboardEvent) {
     if let Some((_, next)) = ranked.first() {
         event.prevent_default();
         let _ = next.focus();
-        next.scroll_into_view_with_bool(false);
+        next.scroll_into_view_with_bool(event.key() == "ArrowUp");
     }
 }
 fn parse_version(v: &str) -> Vec<u32> {
@@ -1196,7 +1202,7 @@ fn check_updates(manual: bool) {
             Ok(data) => {
                 let version = s(&data, "tag_name");
                 let remote = parse_version(&version);
-                let local = parse_version("2.5.0");
+                let local = parse_version("2.6.0");
                 if remote.is_empty() || remote <= local {
                     if manual {
                         notify("أنت تستخدم آخر إصدار");
@@ -1255,7 +1261,7 @@ pub fn init() {
     }
     apply_display();
     update_source();
-    text("installedVersionText", "v2.5.0");
+    text("installedVersionText", "v2.6.0");
     on("tabSeries", "click", |_| set_view("series"));
     on("tabMovies", "click", |_| set_view("movies"));
     on("openLibraryBtn", "click", |_| set_view("library"));

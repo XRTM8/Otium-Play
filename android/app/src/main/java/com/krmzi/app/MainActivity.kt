@@ -48,8 +48,8 @@ class MainActivity : AppCompatActivity() {
     private companion object {
         const val TAG = "KrmziMainActivity"
         const val APP_URL = "https://appassets.androidplatform.net/assets/public/index.html"
-        const val FALLBACK_VERSION_NAME = "2.5.0"
-        const val FALLBACK_VERSION_CODE = 20L
+        const val FALLBACK_VERSION_NAME = "2.6.0"
+        const val FALLBACK_VERSION_CODE = 21L
     }
 
     private lateinit var webView: WebView
@@ -83,7 +83,12 @@ class MainActivity : AppCompatActivity() {
         fun isTelevision(): Boolean {
             val uiMode = (resources.configuration.uiMode and Configuration.UI_MODE_TYPE_MASK) == Configuration.UI_MODE_TYPE_TELEVISION
             val leanback = packageManager.hasSystemFeature(android.content.pm.PackageManager.FEATURE_LEANBACK)
-            return uiMode || leanback
+            val tvFeature = packageManager.hasSystemFeature("android.hardware.type.television")
+            val fireTv = packageManager.hasSystemFeature("amazon.hardware.fire_tv")
+            val isLeanbackLaunch = intent?.categories?.contains(Intent.CATEGORY_LEANBACK_LAUNCHER) == true
+            val isBoxWithoutTouch = !packageManager.hasSystemFeature(android.content.pm.PackageManager.FEATURE_TOUCHSCREEN) &&
+                (resources.configuration.navigation == Configuration.NAVIGATION_DPAD || resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE)
+            return uiMode || leanback || tvFeature || fireTv || isLeanbackLaunch || isBoxWithoutTouch
         }
 
         @JavascriptInterface

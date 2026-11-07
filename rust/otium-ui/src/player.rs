@@ -669,12 +669,24 @@ fn install_hls(url: &str, session: u64, attempt: u64) -> bool {
     let Ok(constructor_fn) = constructor.clone().dyn_into::<Function>() else {
         return false;
     };
+    let is_tv = document()
+        .document_element()
+        .and_then(|e| e.get_attribute("data-display"))
+        .as_deref()
+        == Some("tv");
+    let max_buf = if is_tv { 60. } else { 35. };
+    let back_buf = if is_tv { 30. } else { 20. };
     let config = Object::new();
     for (key, value) in [
-        ("enableWorker", JsValue::TRUE),
+        ("enableWorker", if is_tv { JsValue::FALSE } else { JsValue::TRUE }),
         ("autoStartLoad", JsValue::FALSE),
-        ("maxBufferLength", 30.into()),
-        ("backBufferLength", 20.into()),
+        ("maxBufferLength", max_buf.into()),
+        ("maxMaxBufferLength", 120.into()),
+        ("backBufferLength", back_buf.into()),
+        ("fragLoadingTimeOut", 20000.into()),
+        ("manifestLoadingTimeOut", 15000.into()),
+        ("fragLoadingMaxRetry", 6.into()),
+        ("levelLoadingMaxRetry", 6.into()),
     ] {
         let _ = Reflect::set(&config, &key.into(), &value);
     }
@@ -1737,11 +1749,18 @@ fn tick() {
     let v = video();
     let time = v.current_time();
     let buffered = v.buffered();
-    let end = if buffered.length() > 0 {
-        buffered.end(buffered.length() - 1).unwrap_or(0.)
-    } else {
-        0.
-    };
+    let mut end = 0.;
+    for i in 0..buffered.length() {
+        if let (Ok(start), Ok(b_end)) = (buffered.start(i), buffered.end(i)) {
+            if time >= start - 1.0 && time <= b_end + 1.0 {
+                end = b_end;
+                break;
+            }
+        }
+    }
+    if end == 0. && buffered.length() > 0 {
+        end = buffered.end(buffered.length() - 1).unwrap_or(0.);
+    }
     let (failure, next) = STATE.with(|c| {
         let mut p = c.borrow_mut();
         let now = now();
@@ -1765,9 +1784,20 @@ fn tick() {
         }
         p.last_time = time;
         p.last_buffer = end;
+        let is_tv = document()
+            .document_element()
+            .and_then(|e| e.get_attribute("data-display"))
+            .as_deref()
+            == Some("tv");
+        let startup_limit = if is_tv { 24000. } else { 16000. };
+        let stall_limit = if p.ready {
+            if is_tv { 22000. } else { 14000. }
+        } else {
+            if is_tv { 14000. } else { 6500. }
+        };
         let failed = waiting
-            && ((!p.ready && now - p.started > 16000.)
-                || now - p.advanced > if p.ready { 14000. } else { 6500. });
+            && ((!p.ready && now - p.started > startup_limit)
+                || now - p.advanced > stall_limit);
         (failed, next)
     });
     if next {
@@ -2109,19 +2139,11 @@ fn remote_arrow(key: &str) {
             let dx = other.x() + other.width() / 2. - rect.x() - rect.width() / 2.;
             let dy = other.y() + other.height() / 2. - rect.y() - rect.height() / 2.;
             let distance = if horizontal { dx } else { dy } * sign;
-            if distance <= 3. {
+            if distance <= 2. {
                 return None;
             }
             let side = if horizontal { dy.abs() } else { dx.abs() };
-            let overlap = if horizontal {
-                other.top() < rect.bottom() && other.bottom() > rect.top()
-            } else {
-                other.left() < rect.right() && other.right() > rect.left()
-            };
-            Some((
-                distance + side * 3. + if overlap { 0. } else { 1000. },
-                node,
-            ))
+            Some((distance + side * 1.5, node))
         })
         .collect::<Vec<_>>();
     ranked.sort_by(|a, b| a.0.total_cmp(&b.0));

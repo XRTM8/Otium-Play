@@ -531,7 +531,7 @@ pub enum StreamBody {
 }
 impl StreamBody {
     pub async fn read(&mut self, size: usize) -> Result<Vec<u8>> {
-        let size = size.clamp(1, 65536);
+        let size = size.clamp(1, 262144);
         match self {
             StreamBody::Bytes(cursor) => {
                 let mut bytes = vec![0; size];

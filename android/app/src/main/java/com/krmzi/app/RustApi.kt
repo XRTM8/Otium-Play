@@ -43,7 +43,8 @@ object RustApi {
             if (ended) return -1
             if (closed) throw IOException("Stream closed")
             if (position >= chunk.size) {
-                chunk = RustApi.read(handle, minOf(length, 65536))
+                val fetchSize = maxOf(length, 131072)
+                chunk = RustApi.read(handle, minOf(fetchSize, 262144))
                 position = 0
                 if (chunk.isEmpty()) { ended = true; close(); return -1 }
             }
