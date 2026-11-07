@@ -44,9 +44,6 @@
         <!-- Clean Remote Video Embed (Ads safely filtered natively by Android WebView) -->
         <iframe id="embedPlayer" class="video-elem hidden" allow="autoplay; fullscreen; encrypted-media; picture-in-picture" allowfullscreen referrerpolicy="no-referrer"></iframe>
 
-        <!-- Brightness Dimmer Layer -->
-        <div class="dimmer-layer" id="brightnessFilter"></div>
-
         <!-- 2x Speed Minimal Chip -->
         <div class="speed-chip hidden" id="speed2xPill">
           <span>2X</span>
@@ -54,10 +51,7 @@
         </div>
 
         <!-- Gesture Feedback Pill (Volume / Brightness) -->
-        <div class="gesture-pill hidden" id="swipeIndicator">
-          <i class="fa-solid fa-volume-high" id="swipeIcon"></i>
-          <span id="swipeValue">100%</span>
-        </div>
+        <div class="gesture-pill hidden" id="swipeIndicator"><span id="swipeValue"></span></div>
 
         <!-- Double-Tap Seek Ripples -->
         <div class="touch-surface" id="gesturesLayer">

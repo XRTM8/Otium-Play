@@ -53,8 +53,6 @@ struct Gesture {
     moved: bool,
     hold: bool,
     previous_rate: f64,
-    start: f64,
-    volume: bool,
 }
 struct Player {
     session: u64,
@@ -85,6 +83,7 @@ struct Player {
     hud: Option<Timeout>,
     pill: Option<Timeout>,
     hold: Option<Timeout>,
+    tap_timer: Option<Timeout>,
     embed_timer: Option<Timeout>,
     gesture: Gesture,
     last_tap: f64,
@@ -93,7 +92,6 @@ struct Player {
     next_deadline: Option<f64>,
     next_cancelled: bool,
     season: String,
-    brightness: f64,
 }
 impl Default for Player {
     fn default() -> Self {
@@ -126,6 +124,7 @@ impl Default for Player {
             hud: None,
             pill: None,
             hold: None,
+            tap_timer: None,
             embed_timer: None,
             embed_handler: None,
             gesture: Gesture::default(),
@@ -134,7 +133,6 @@ impl Default for Player {
             next_deadline: None,
             next_cancelled: false,
             season: "1".into(),
-            brightness: 1.,
         }
     }
 }
@@ -1348,6 +1346,7 @@ pub fn close() {
         p.next_deadline = None;
         p.hud = None;
         p.hold = None;
+        p.tap_timer = None;
     });
     release_media();
     show("mobilePlayer", false);
@@ -1369,16 +1368,20 @@ pub fn toggle() {
     }
     show_hud(true);
 }
+fn ripple(forward: bool) {
+    let id = if forward { "rippleRight" } else { "rippleLeft" };
+    class(id, "active", true);
+    Timeout::new(450, move || {
+        class(id, "active", false);
+    })
+    .forget();
+}
 pub fn seek(seconds: f64) {
     let v = video();
     if v.duration().is_finite() && v.duration() > 0. {
         v.set_current_time((v.current_time() + seconds).clamp(0., v.duration()));
         progress();
-        pill(&format!(
-            "{}{seconds} ثانية",
-            if seconds > 0. { "+" } else { "" }
-        ));
-        show_hud(true);
+        ripple(seconds > 0.);
     }
 }
 fn format_time(time: f64) -> String {
@@ -1475,10 +1478,22 @@ fn ready(playing: bool) {
 }
 fn pill(message: &str) {
     text("swipeValue", message);
-    html("swipeIcon", "");
     show("swipeIndicator", true);
-    let timer = Timeout::new(1600, || show("swipeIndicator", false));
+    let timer = Timeout::new(1800, || show("swipeIndicator", false));
     STATE.with(|c| c.borrow_mut().pill = Some(timer));
+}
+fn is_hud_visible() -> bool {
+    !el("playerHudTop").class_list().contains("hud-hidden")
+        || !el("playerHudBottom").class_list().contains("hud-hidden")
+        || !el("hudCenter").class_list().contains("hud-hidden")
+}
+fn hide_hud() {
+    STATE.with(|c| {
+        c.borrow_mut().hud = None;
+    });
+    class("playerHudTop", "hud-hidden", true);
+    class("playerHudBottom", "hud-hidden", true);
+    class("hudCenter", "hud-hidden", true);
 }
 fn show_hud(auto_hide: bool) {
     class("playerHudTop", "hud-hidden", false);
@@ -1491,9 +1506,7 @@ fn show_hud(auto_hide: bool) {
     let timer = if auto_hide {
         Some(Timeout::new(3200, || {
             if !video().paused() || STATE.with(|c| c.borrow().embedded.is_some()) {
-                class("playerHudTop", "hud-hidden", true);
-                class("playerHudBottom", "hud-hidden", true);
-                class("hudCenter", "hud-hidden", true);
+                hide_hud();
             }
         }))
     } else {
@@ -1940,8 +1953,6 @@ fn gestures() {
         if STATE.with(|c| c.borrow().embedded.is_some()) {
             return;
         }
-        let rect = el("gesturesLayer").get_bounding_client_rect();
-        let volume = event.client_x() as f64 - rect.left() > rect.width() / 2.;
         let v = video();
         let gesture = Gesture {
             x: event.client_x() as f64,
@@ -1950,12 +1961,6 @@ fn gestures() {
             moved: false,
             hold: false,
             previous_rate: v.playback_rate(),
-            start: if volume {
-                v.volume()
-            } else {
-                STATE.with(|c| c.borrow().brightness)
-            },
-            volume,
         };
         let hold = Timeout::new(350, || {
             let enable = STATE.with(|c| {
@@ -1988,28 +1993,12 @@ fn gestures() {
         let gesture = STATE.with(|c| c.borrow().gesture.clone());
         let dx = event.client_x() as f64 - gesture.x;
         let dy = event.client_y() as f64 - gesture.y;
-        if dx.abs() > 12. || dy.abs() > 12. {
+        if dx.abs() > 10. || dy.abs() > 10. {
             STATE.with(|c| {
                 let mut p = c.borrow_mut();
                 p.gesture.moved = true;
                 p.hold = None;
             });
-        }
-        if dy.abs() > 12. && dy.abs() > dx.abs() {
-            let value = (gesture.start - dy / 140.).clamp(0.05, 1.);
-            if gesture.volume {
-                video().set_volume(value);
-                video().set_muted(false);
-                pill(&format!("الصوت {:.0}%", value * 100.));
-            } else {
-                STATE.with(|c| c.borrow_mut().brightness = value);
-                style(
-                    "brightnessFilter",
-                    "--brightness-darkness",
-                    &((1. - value) * 0.85).to_string(),
-                );
-                pill(&format!("الإضاءة {:.0}%", value * 100.));
-            }
         }
     });
     for name in ["pointerup", "pointercancel"] {
@@ -2032,21 +2021,38 @@ fn gestures() {
             if cancel || gesture.moved {
                 return;
             }
-            let double = STATE.with(|c| {
-                let mut p = c.borrow_mut();
-                let double = gesture.at - p.last_tap < 300. && p.last_tap > 0.;
-                p.last_tap = if double { 0. } else { gesture.at };
-                double
-            });
-            if double {
-                let rect = el("gesturesLayer").get_bounding_client_rect();
-                seek(if gesture.x - rect.left() < rect.width() / 2. {
-                    -10.
-                } else {
-                    10.
+
+            if is_hud_visible() {
+                // Single tap on visible controls immediately hides everything
+                hide_hud();
+                STATE.with(|c| {
+                    let mut p = c.borrow_mut();
+                    p.tap_timer = None;
+                    p.last_tap = 0.;
                 });
             } else {
-                show_hud(true);
+                // Controls are hidden: detect double tap to seek or single tap to reveal
+                let double = STATE.with(|c| {
+                    let mut p = c.borrow_mut();
+                    let is_double = gesture.at - p.last_tap < 280. && p.last_tap > 0.;
+                    p.last_tap = if is_double { 0. } else { gesture.at };
+                    is_double
+                });
+                if double {
+                    STATE.with(|c| {
+                        c.borrow_mut().tap_timer = None;
+                    });
+                    let rect = el("gesturesLayer").get_bounding_client_rect();
+                    let forward = gesture.x - rect.left() >= rect.width() / 2.;
+                    seek(if forward { 10. } else { -10. });
+                } else {
+                    let timer = Timeout::new(220, || {
+                        show_hud(true);
+                    });
+                    STATE.with(|c| {
+                        c.borrow_mut().tap_timer = Some(timer);
+                    });
+                }
             }
         });
     }
@@ -2054,7 +2060,14 @@ fn gestures() {
 pub fn init() {
     on("dismissPlayerBtn", "click", |_| close());
     on("centerPlay", "click", |_| toggle());
-    on("centerRewind", "click", |_| seek(-10.));
+    on("centerRewind", "click", |_| {
+        seek(-10.);
+        show_hud(true);
+    });
+    on("centerForward", "click", |_| {
+        seek(10.);
+        show_hud(true);
+    });
     on("centerForward", "click", |_| seek(10.));
     on("openServersSheetBtn", "click", |_| open_sources());
     on("drawerOpenServersBtn", "click", |_| open_sources());
