@@ -1,6 +1,6 @@
 @echo off
-title Otium Play
+title ZOET by Otium
 cd /d "%~dp0"
-echo Otium Play - http://localhost:3000
+echo ZOET by Otium - http://localhost:3000
 cargo run --manifest-path rust/otium-core/Cargo.toml --locked --release
 pause

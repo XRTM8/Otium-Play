@@ -1,4 +1,4 @@
-# Otium Play continuation
+# ZOET by Otium continuation
 
 Read `HANDOFF.md` before changing this repository. It contains the current user requirements, completed Rust migration, verification evidence, remaining release work, and signing constraints.
 

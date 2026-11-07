@@ -223,10 +223,10 @@ class MainActivity : AppCompatActivity() {
                                 connectTimeout = 15_000
                                 readTimeout = 60_000
                                 instanceFollowRedirects = true
-                                setRequestProperty("User-Agent", "OtiumPlay-Android")
+                                setRequestProperty("User-Agent", "ZOET-Android")
                             }
                             if (conn.responseCode in 200..299) {
-                                val updateFile = File(cacheDir, "otium-update.apk")
+                                val updateFile = File(cacheDir, "zoet-update.apk")
                                 if (updateFile.exists()) updateFile.delete()
                                 conn.inputStream.use { input ->
                                     updateFile.outputStream().use { output ->

@@ -33,7 +33,7 @@ fn main() {
         .canonicalize()
         .expect("OTIUM_PUBLIC must point to the public directory");
     let listener = TcpListener::bind(&bind).expect("Unable to bind server");
-    println!("Otium Play Rust server: http://{bind}");
+    println!("ZOET by Otium Rust server: http://{bind}");
     let active = Arc::new(AtomicUsize::new(0));
     for socket in listener.incoming() {
         let Ok(mut socket) = socket else {

@@ -1,4 +1,4 @@
-name: Build & Release Otium Play APK
+name: Build & Release ZOET APK
 
 on:
   workflow_dispatch:
@@ -91,9 +91,9 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.event.inputs.version || github.ref_name }}
-          name: Otium Play - ${{ github.event.inputs.version || github.ref_name }}
+          name: ZOET - ${{ github.event.inputs.version || github.ref_name }}
           body: |
-            Otium Play 2.0 — Rust/WebAssembly
+            ZOET by Otium 2.0 — Rust/WebAssembly
 
             - قائمة مسلسلات وقائمة أفلام مستقلة بتصميم زجاج داكن.
             - تصفّح وبحث متعدد الصفحات ودمج قرمزي وسينمانا.

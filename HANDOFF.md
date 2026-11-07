@@ -1,10 +1,10 @@
-# Otium Play — continuation checkpoint
+# ZOET by Otium — continuation checkpoint
 
 Updated: 2026-11-06, Asia/Baghdad. The user has approximately5% quota left and explicitly requested a durable handoff so another tool can continue. Do not start over or replace this implementation with a mockup.
 
 ## Ready-to-copy prompt
 
-> Continue the Otium Play work in this repository. Read AGENTS.md, HANDOFF.md, AUDIT.md and RUST_MIGRATION.md first, inspect git status and the latest commit, and finish the remaining checks/release work below. Preserve the actual Rust implementation and the user's minimal series/movies interface. Do not upload private signing material or include ep.json/home.json. Check what has already completed before repeating builds. Explain any remaining physical-device limitation honestly.
+> Continue the ZOET by Otium work in this repository. Read AGENTS.md, HANDOFF.md, AUDIT.md and RUST_MIGRATION.md first, inspect git status and the latest commit, and finish the remaining checks/release work below. Preserve the actual Rust implementation and the user's minimal series/movies interface. Do not upload private signing material or include ep.json/home.json. Check what has already completed before repeating builds. Explain any remaining physical-device limitation honestly.
 
 ## Repository and user intent
 

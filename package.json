@@ -1,7 +1,7 @@
 {
-  "name": "otium-play",
+  "name": "zoet",
   "version": "2.0.0",
-  "description": "Otium Play — Rust and WebAssembly streaming client",
+  "description": "ZOET by Otium — Rust and WebAssembly streaming client",
   "scripts": {
     "start": "cargo run --manifest-path rust/otium-core/Cargo.toml --locked",
     "build:ui": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-rust-ui.ps1",

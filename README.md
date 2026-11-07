@@ -1,4 +1,4 @@
-# Otium Play 2.0
+# ZOET by Otium 2.0
 
 تطبيق Android وويب مكتوب بمنطق Rust، بواجهة WebAssembly ومحرك مصادر مشترك يعمل مباشرة من شبكة المستخدم.
 

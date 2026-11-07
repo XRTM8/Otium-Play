@@ -1,4 +1,4 @@
-# Otium Play 2.0 — Rust architecture
+# ZOET by Otium 2.0 — Rust architecture
 
 The authored application logic is implemented in Rust. This includes the UI state and DOM rendering, catalogue adapters and identity matching, playback orchestration, provider extraction, caching and media proxying. It does not mean every dependency or operating-system interface is written in Rust.
 

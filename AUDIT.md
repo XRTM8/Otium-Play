@@ -1,4 +1,4 @@
-# Otium Play2.0 — findings and verification
+# ZOET by Otium 2.0 — findings and verification
 
 | Problem | Change | Verification |
 | --- | --- | --- |
