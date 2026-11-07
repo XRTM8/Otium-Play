@@ -367,7 +367,7 @@ class MainActivity : AppCompatActivity() {
                 }
                 val modes = display?.supportedModes
                 val currentMode = display?.mode
-                val highestMode = modes?.filter { it.physicalWidth == currentMode?.physicalWidth && it.physicalHeight == currentMode.physicalHeight && it.refreshRate <= 120.5f }?.maxByOrNull { it.refreshRate }
+                val highestMode = modes?.filter { it.physicalWidth == currentMode?.physicalWidth && it.physicalHeight == currentMode.physicalHeight }?.maxByOrNull { it.refreshRate }
                 if (highestMode != null && highestMode.refreshRate > 60f) {
                     val params = window.attributes
                     params.preferredDisplayModeId = highestMode.modeId
@@ -388,7 +388,7 @@ class MainActivity : AppCompatActivity() {
                 ViewGroup.LayoutParams.MATCH_PARENT
             )
             setBackgroundColor(Color.TRANSPARENT)
-            setLayerType(View.LAYER_TYPE_HARDWARE, null)
+            setLayerType(View.LAYER_TYPE_NONE, null)
             overScrollMode = View.OVER_SCROLL_NEVER
             isVerticalScrollBarEnabled = false
             isHorizontalScrollBarEnabled = false

@@ -1273,7 +1273,7 @@ html[data-display='tv'] .seek-step { font-size:15px;bottom:14px }
 .catalogue-tabs button:active { transform: scale(0.95); }
 .catalogue-tabs button.active:after { content:'';position:absolute;inset:auto 0 -1px;height:2.5px;background:#ffffff;border-radius:3px;box-shadow:0 0 10px rgba(255,255,255,0.45);animation:tab-line-appear .2s var(--ease-out-expo); }
 @keyframes tab-line-appear { from{transform:scaleX(0.4);opacity:0}to{transform:scaleX(1);opacity:1} }
-.content-canvas { inset:calc(124px + var(--safe-top)) 0 0;padding:0 0 calc(28px + var(--safe-bottom));scroll-behavior:auto;contain:layout style;-webkit-overflow-scrolling:touch }
+.content-canvas { inset:calc(124px + var(--safe-top)) 0 0;padding:0 0 calc(28px + var(--safe-bottom));scroll-behavior:auto;contain:layout style;touch-action:pan-y;overscroll-behavior-y:contain;-webkit-overflow-scrolling:touch }
 .source-switcher { padding:20px 24px 22px;gap:12px }
 .source-options { margin-inline-start:0;background:#ffffff04;padding:3px;border:1px solid var(--line-subtle) }
 .source-option { min-height:34px;padding:6px 14px;font-size:12px }
