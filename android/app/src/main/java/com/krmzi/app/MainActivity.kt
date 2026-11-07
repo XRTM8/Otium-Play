@@ -48,8 +48,8 @@ class MainActivity : AppCompatActivity() {
     private companion object {
         const val TAG = "KrmziMainActivity"
         const val APP_URL = "https://appassets.androidplatform.net/assets/public/index.html"
-        const val FALLBACK_VERSION_NAME = "2.1.0"
-        const val FALLBACK_VERSION_CODE = 16L
+        const val FALLBACK_VERSION_NAME = "2.2.0"
+        const val FALLBACK_VERSION_CODE = 17L
     }
 
     private lateinit var webView: WebView
@@ -101,7 +101,8 @@ class MainActivity : AppCompatActivity() {
                                     .build()
                             )
                         }
-                        requestPlaybackAudioFocus()
+                        // Note: Chromium WebView manages audio focus internally for HTML5 video.
+                        // Do not request manual audio focus here to prevent Xiaomi/MIUI focus collision pausing.
                         registerNoisyReceiver()
                         mediaSession?.let {
                             it.isActive = true
@@ -114,7 +115,6 @@ class MainActivity : AppCompatActivity() {
                     } else {
                         window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                         hideSystemBars(false)
-                        abandonPlaybackAudioFocus()
                         unregisterNoisyReceiver()
                         mediaSession?.let {
                             val state = PlaybackState.Builder()
@@ -524,7 +524,7 @@ class MainActivity : AppCompatActivity() {
                     .setAudioAttributes(playbackAttributes)
                     .setAcceptsDelayedFocusGain(false)
                     .setOnAudioFocusChangeListener { focusChange ->
-                        if (focusChange == AudioManager.AUDIOFOCUS_LOSS || focusChange == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT) {
+                        if (focusChange == AudioManager.AUDIOFOCUS_LOSS) {
                             runOnUiThread {
                                 if (isVideoPlaying && ::webView.isInitialized) {
                                     webView.evaluateJavascript("if (window.zoetTogglePlayer) { if (!document.getElementById('nativePlayer')?.paused) window.zoetTogglePlayer(); }", null)
@@ -539,7 +539,7 @@ class MainActivity : AppCompatActivity() {
                 @Suppress("DEPRECATION")
                 am.requestAudioFocus(
                     { focusChange ->
-                        if (focusChange == AudioManager.AUDIOFOCUS_LOSS || focusChange == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT) {
+                        if (focusChange == AudioManager.AUDIOFOCUS_LOSS) {
                             runOnUiThread {
                                 if (isVideoPlaying && ::webView.isInitialized) {
                                     webView.evaluateJavascript("if (window.zoetTogglePlayer) { if (!document.getElementById('nativePlayer')?.paused) window.zoetTogglePlayer(); }", null)

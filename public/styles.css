@@ -1337,8 +1337,8 @@ html[data-view='movies'] .source-options { display:none }
 .media-grid { grid-template-columns:repeat(2,minmax(0,1fr));gap:26px 16px;contain:none }
 .series-tile { display:block;text-align:start;color:inherit;animation:card-reveal .22s var(--ease-out-expo) both;transition:transform .22s var(--ease-out-expo);min-width:0;border-radius:12px;outline:none; }
 .series-tile:active { transform:scale(0.96); }
-.poster-frame { display:block;aspect-ratio:2/3;overflow:hidden;border-radius:12px;background:var(--bg-surface);border:1px solid rgba(255,255,255,0.08);box-shadow:0 4px 16px rgba(0,0,0,0.3);transition:border-color .22s,box-shadow .22s; }
-.series-tile-thumb { width:100%;height:100%;aspect-ratio:2/3;border-radius:0;object-fit:cover;transition:transform .3s var(--ease-out-expo); }
+.poster-frame { display:block;aspect-ratio:2/3;overflow:hidden;border-radius:12px;background:#111318;border:1px solid rgba(255,255,255,0.08);box-shadow:0 4px 16px rgba(0,0,0,0.3);transition:border-color .22s,box-shadow .22s; }
+.series-tile-thumb { width:100%;height:100%;aspect-ratio:2/3;border-radius:0;object-fit:cover;object-position:center 20%;transition:transform .3s var(--ease-out-expo); }
 @media(hover:hover)and(pointer:fine){
   .series-tile:hover { transform:translateY(-4px) scale(1.02); }
   .series-tile:hover .poster-frame { border-color:rgba(255,255,255,0.22);box-shadow:0 14px 32px -8px rgba(0,0,0,0.65), 0 0 0 1px rgba(255,255,255,0.12); }
@@ -1349,7 +1349,7 @@ html[data-view='movies'] .source-options { display:none }
 .series-tile:focus-visible { transform:translateY(-4px) scale(1.03);outline:none; }
 .series-tile:focus-visible .poster-frame { border-color:#ffffff;box-shadow:0 0 0 3px rgba(255,255,255,0.35), 0 16px 36px rgba(0,0,0,0.7); }
 .series-tile-body { display:block;padding:11px 1px 0 }
-.series-tile-title { display:-webkit-box;font-size:14px;font-weight:500;line-height:1.55 }
+.series-tile-title { display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;height:2.85em;min-height:2.85em;font-size:13.5px;font-weight:500;line-height:1.42 }
 .series-tile-sub { display:block;font-size:11px;line-height:1.4;color:var(--text-dim);margin-top:4px;min-height:0 }
 .series-tile-sub:empty { display:none }
 .catalogue-sources { margin-top:6px;min-height:0 }

@@ -305,12 +305,7 @@ fn render_grid(id: &str, items: &[Value]) {
     let mut retained = HashSet::new();
     let mut previous: Option<Element> = None;
     let holder = document().create_element("div").unwrap();
-    let items_slice: &[Value] = if items.len() > 96 {
-        &items[..96]
-    } else {
-        items
-    };
-    for item in items_slice {
+    for item in items {
         let url = s(item, "url");
         let markup = card(item);
         let node = if let Some(node) = nodes
@@ -590,6 +585,10 @@ fn load_listing(search: bool, reset: bool) {
                                 None
                             };
                         provider.items.extend(added);
+                        // cap stored items per-provider to 480 to prevent unbounded memory growth
+                        if provider.items.len() > 480 {
+                            provider.items.drain(..provider.items.len() - 480);
+                        }
                         provider.failed = false;
                     }
                     _ => {
@@ -1176,6 +1175,13 @@ fn remote_focus(event: &KeyboardEvent) {
         next.scroll_into_view_with_bool(false);
     }
 }
+fn parse_version(v: &str) -> Vec<u32> {
+    v.trim_start_matches('v')
+        .split('.')
+        .map(|n| n.parse::<u32>().unwrap_or(0))
+        .collect()
+}
+
 fn check_updates(manual: bool) {
     if manual {
         text("checkUpdateBtnText", "جاري الفحص…");
@@ -1189,12 +1195,9 @@ fn check_updates(manual: bool) {
         match result {
             Ok(data) => {
                 let version = s(&data, "tag_name");
-                let remote = version
-                    .trim_start_matches('v')
-                    .split('.')
-                    .map(|n| n.parse::<u32>().unwrap_or(0))
-                    .collect::<Vec<_>>();
-                if remote <= vec![2, 0, 0] {
+                let remote = parse_version(&version);
+                let local = parse_version("2.2.0");
+                if remote.is_empty() || remote <= local {
                     if manual {
                         notify("أنت تستخدم آخر إصدار");
                     }
@@ -1231,6 +1234,14 @@ fn check_updates_manual() {
 }
 
 fn check_updates_auto() {
+    let last = storage("zoet_update_checked")
+        .and_then(|s| s.parse::<f64>().ok())
+        .unwrap_or(0.0);
+    let now = js_sys::Date::now();
+    if now - last < 86_400_000.0 {
+        return;
+    }
+    store("zoet_update_checked", &now.to_string());
     check_updates(false);
 }
 pub fn init() {
@@ -1244,7 +1255,7 @@ pub fn init() {
     }
     apply_display();
     update_source();
-    text("installedVersionText", "v2.1.0");
+    text("installedVersionText", "v2.2.0");
     on("tabSeries", "click", |_| set_view("series"));
     on("tabMovies", "click", |_| set_view("movies"));
     on("openLibraryBtn", "click", |_| set_view("library"));

@@ -994,7 +994,22 @@ fn render_drawer() {
     let mut seasons: Vec<String> = episodes.iter().map(season_of).collect();
     seasons.sort_by_key(|s| s.parse::<u32>().unwrap_or(0));
     seasons.dedup();
-    html("drawerSeasonTabs",&seasons.iter().map(|s|format!("<button class=\"season-tab {}\" data-player-action=\"season\" data-season=\"{}\">الموسم {}</button>",if *s==season{"active"}else{""},esc(s),esc(s))).collect::<String>());
+    let has_multiple_seasons = seasons.len() > 1;
+    let active_season = if has_multiple_seasons {
+        if seasons.contains(&season) {
+            season
+        } else {
+            seasons.first().cloned().unwrap_or_else(|| "1".into())
+        }
+    } else {
+        String::new()
+    };
+    if has_multiple_seasons {
+        show("drawerSeasonTabs", true);
+        html("drawerSeasonTabs",&seasons.iter().map(|s|format!("<button class=\"season-tab {}\" data-player-action=\"season\" data-season=\"{}\">الموسم {}</button>",if *s==active_season{"active"}else{""},esc(s),esc(s))).collect::<String>());
+    } else {
+        show("drawerSeasonTabs", false);
+    }
     let query = el("drawerEpisodeSearch")
         .dyn_into::<HtmlInputElement>()
         .map(|i| catalogue::normalized(&i.value()))
@@ -1003,7 +1018,7 @@ fn render_drawer() {
     let current_url = s(&episode, "url");
     let content = episodes
         .iter()
-        .filter(|ep| season_of(ep) == season)
+        .filter(|ep| !has_multiple_seasons || season_of(ep) == active_season)
         .filter(|ep| {
             query.is_empty()
                 || catalogue::normalized(&format!(
@@ -1164,7 +1179,29 @@ fn switch_provider(url: String) {
             );
             return;
         };
-        let Some(matched) = catalogue::match_episode(&episode, &rows(&series, "episodes")) else {
+        let target_episodes = rows(&series, "episodes");
+        let matched = catalogue::match_episode(&episode, &target_episodes).or_else(|| {
+            // Smart cross-source mapping between flat-numbering (Krmzi) and seasonal (Cinemana)
+            let current_url = s(&episode, "url");
+            let current_pos = STATE.with(|c| {
+                c.borrow()
+                    .episodes
+                    .iter()
+                    .position(|e| s(e, "url") == current_url)
+            });
+            if let Some(pos) = current_pos {
+                if pos < target_episodes.len() {
+                    return Some(target_episodes[pos].clone());
+                }
+            }
+            let num = catalogue::episode_number(&episode).parse::<usize>().ok()?;
+            if num > 0 && num <= target_episodes.len() {
+                Some(target_episodes[num - 1].clone())
+            } else {
+                None
+            }
+        });
+        let Some(matched) = matched else {
             app::open_sheet("ترقيم الحلقات مختلف",&format!("<p class=\"empty-note\">ما غيرنا الحلقة تلقائياً حتى ما نفتح حلقة مختلفة.</p><button class=\"sheet-row\" data-player-action=\"browse-source\" data-url=\"{}\">عرض حلقات المصدر الآخر</button>",esc(&url)));
             return;
         };
