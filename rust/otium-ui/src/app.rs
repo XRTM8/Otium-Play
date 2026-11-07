@@ -305,7 +305,12 @@ fn render_grid(id: &str, items: &[Value]) {
     let mut retained = HashSet::new();
     let mut previous: Option<Element> = None;
     let holder = document().create_element("div").unwrap();
-    for item in items {
+    let items_slice: &[Value] = if items.len() > 96 {
+        &items[..96]
+    } else {
+        items
+    };
+    for item in items_slice {
         let url = s(item, "url");
         let markup = card(item);
         let node = if let Some(node) = nodes
@@ -438,10 +443,23 @@ fn render_listing(search: bool) {
     );
     if !search {
         text("seriesCountSub", &items.len().to_string());
-        show(
-            "offlineState",
-            items.is_empty() && pending == 0 && !failed.is_empty(),
-        );
+        let is_offline = items.is_empty() && pending == 0 && !failed.is_empty();
+        show("offlineState", is_offline);
+        if is_offline && view == "movies" {
+            text("offlineTitle", "أفلام سينمانا غير متاحة على اتصالك");
+            text(
+                "offlineDesc",
+                "تتطلب الأفلام الاتصال بشبكة إيرثلنك أو VPN عراقي. مسلسلات قرمزي تعمل على كافة الشبكات.",
+            );
+            show("switchToSeriesBtn", true);
+        } else if is_offline {
+            text("offlineTitle", "تعذّر الوصول إلى المصادر");
+            text(
+                "offlineDesc",
+                "تحقّق من الاتصال وأعد المحاولة. توفّر سينمانا يعتمد على مزوّد الإنترنت.",
+            );
+            show("switchToSeriesBtn", false);
+        }
     }
 }
 fn load_listing(search: bool, reset: bool) {
@@ -1244,6 +1262,7 @@ pub fn init() {
     on("loadMoreSeriesBtn", "click", |_| load_listing(false, false));
     on("loadMoreSearchBtn", "click", |_| load_listing(true, false));
     on("retryBtn", "click", |_| load_listing(false, false));
+    on("switchToSeriesBtn", "click", |_| set_view("series"));
     on("closeSheetBtn", "click", |_| close_sheet());
     on("sheetBackdrop", "click", |event| {
         if event.target().as_ref() == Some(el("sheetBackdrop").as_ref()) {

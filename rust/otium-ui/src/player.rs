@@ -167,6 +167,11 @@ fn bridge(method: &str, value: JsValue) {
         let _ = call(&target, method, &args(&[value]));
     }
 }
+fn bridge_metadata(title: &str, series: &str) {
+    if let Ok(target) = Reflect::get(window().as_ref(), &"KrmziBridge".into()) {
+        let _ = call(&target, "updateMediaMetadata", &args(&[title.into(), series.into()]));
+    }
+}
 fn source_name(source: &str) -> &str {
     if source == "cinemana" {
         "سينمانا"
@@ -308,8 +313,11 @@ fn backdrop(url: &str) {
     );
 }
 fn title_ui(episode: &Value) {
-    text("hudEpTitle", &s(episode, "title"));
-    text("hudSeriesTitle", &s(episode, "seriesTitle"));
+    let ep_title = s(episode, "title");
+    let series_title = s(episode, "seriesTitle");
+    text("hudEpTitle", &ep_title);
+    text("hudSeriesTitle", &series_title);
+    bridge_metadata(&ep_title, &series_title);
     html(
         "playerFavBtn",
         if app::is_favorite(episode) {
@@ -407,8 +415,11 @@ fn open(url: String, resume: Option<PlaybackSnapshot>, fresh: bool) {
     html("drawerEpisodesCarousel", "");
     text("drawerCount", "جاري جلب الحلقات…");
     backdrop(&art(&context));
-    text("hudEpTitle", &s(&context, "title"));
-    text("hudSeriesTitle", &s(&context, "seriesTitle"));
+    let ep_title = s(&context, "title");
+    let series_title = s(&context, "seriesTitle");
+    text("hudEpTitle", &ep_title);
+    text("hudSeriesTitle", &series_title);
+    bridge_metadata(&ep_title, &series_title);
     loading("جاري تجهيز الحلقة…");
     show_hud(false);
     spawn_local(async move {
@@ -1264,7 +1275,7 @@ pub fn open_quality() {
     let Some(episode) = current_episode() else {
         return;
     };
-    let mut content="<button class=\"sheet-row\" data-player-action=\"quality-auto\"><span>تلقائي</span></button>".to_string();
+    let mut content = "<div class=\"sheet-sub-title\">جودة الفيديو</div><button class=\"sheet-row\" data-player-action=\"quality-auto\"><span>تلقائي (تكيف ديناميكي)</span></button>".to_string();
     let levels = hls_levels();
     if !levels.is_empty() {
         for (index, height) in levels.iter().enumerate() {
@@ -1277,7 +1288,27 @@ pub fn open_quality() {
             }
         }
     }
-    app::open_sheet("جودة الفيديو", &content);
+    let audio_tracks = hls_audio_tracks();
+    if audio_tracks.len() > 1 {
+        content.push_str("<div class=\"sheet-sub-title\" style=\"margin-top:14px;\">المسار الصوتي</div>");
+        let active = current_hls_audio_track();
+        for (index, name) in &audio_tracks {
+            let is_active = *index == active;
+            let icon = if is_active { "<i class=\"fa-solid fa-check\"></i> " } else { "" };
+            content.push_str(&format!("<button class=\"sheet-row\" data-player-action=\"audio-track\" data-index=\"{index}\"><span>{icon}{name}</span></button>"));
+        }
+    }
+    let tracks = rows(&episode, "subtitles");
+    if !tracks.is_empty() {
+        content.push_str("<div class=\"sheet-sub-title\" style=\"margin-top:14px;\">حجم خط الترجمة</div>");
+        let current_size = storage("zoet_sub_size").unwrap_or_else(|| "medium".into());
+        for (sz_key, sz_label) in [("small", "صغير"), ("medium", "متوسط (افتراضي)"), ("large", "كبير")] {
+            let is_active = current_size == sz_key;
+            let icon = if is_active { "<i class=\"fa-solid fa-check\"></i> " } else { "" };
+            content.push_str(&format!("<button class=\"sheet-row\" data-player-action=\"sub-size\" data-size=\"{sz_key}\"><span>{icon}{sz_label}</span></button>"));
+        }
+    }
+    app::open_sheet("خيارات المشغل والصوت", &content);
 }
 fn hls_levels() -> Vec<u32> {
     STATE.with(|c| {
@@ -1285,22 +1316,80 @@ fn hls_levels() -> Vec<u32> {
             .hls
             .as_ref()
             .map(|h| {
-                Reflect::get(&h.instance, &"levels".into())
-                    .map(|levels| {
-                        Array::from(&levels)
-                            .iter()
-                            .map(|level| {
-                                Reflect::get(&level, &"height".into())
-                                    .ok()
-                                    .and_then(|v| v.as_f64())
-                                    .unwrap_or(0.) as u32
-                            })
-                            .collect()
-                    })
-                    .unwrap_or_default()
+                let levels = Reflect::get(&h.instance, &"levels".into()).unwrap_or(JsValue::UNDEFINED);
+                if Array::is_array(&levels) {
+                    Array::from(&levels)
+                        .iter()
+                        .map(|level| {
+                            Reflect::get(&level, &"height".into())
+                                .ok()
+                                .and_then(|v| v.as_f64())
+                                .unwrap_or(0.) as u32
+                        })
+                        .collect()
+                } else {
+                    vec![]
+                }
             })
             .unwrap_or_default()
     })
+}
+fn hls_audio_tracks() -> Vec<(i32, String)> {
+    STATE.with(|c| {
+        c.borrow()
+            .hls
+            .as_ref()
+            .map(|h| {
+                let tracks = Reflect::get(&h.instance, &"audioTracks".into()).unwrap_or(JsValue::UNDEFINED);
+                if Array::is_array(&tracks) {
+                    Array::from(&tracks)
+                        .iter()
+                        .enumerate()
+                        .map(|(i, track)| {
+                            let name = Reflect::get(&track, &"name".into())
+                                .ok()
+                                .and_then(|v| v.as_string())
+                                .or_else(|| {
+                                    Reflect::get(&track, &"lang".into())
+                                        .ok()
+                                        .and_then(|v| v.as_string())
+                                })
+                                .unwrap_or_else(|| format!("مسار {}", i + 1));
+                            (i as i32, name)
+                        })
+                        .collect()
+                } else {
+                    vec![]
+                }
+            })
+            .unwrap_or_default()
+    })
+}
+fn current_hls_audio_track() -> i32 {
+    STATE.with(|c| {
+        c.borrow()
+            .hls
+            .as_ref()
+            .and_then(|h| {
+                Reflect::get(&h.instance, &"audioTrack".into())
+                    .ok()
+                    .and_then(|v| v.as_f64())
+                    .map(|v| v as i32)
+            })
+            .unwrap_or(-1)
+    })
+}
+fn set_hls_audio_track(index: i32) {
+    let instance = STATE.with(|c| c.borrow().hls.as_ref().map(|h| h.instance.clone()));
+    if let Some(h) = instance {
+        let _ = Reflect::set(&h, &"audioTrack".into(), &index.into());
+    }
+}
+fn apply_sub_size() {
+    let size = storage("zoet_sub_size").unwrap_or_else(|| "medium".into());
+    for s in ["small", "medium", "large"] {
+        class("mobilePlayer", &format!("sub-size-{s}"), s == size);
+    }
 }
 fn hls_level(index: i32) {
     let instance = STATE.with(|c| c.borrow().hls.as_ref().map(|h| h.instance.clone()));
@@ -1748,6 +1837,19 @@ fn action(row: Element) {
             }
             app::close_sheet();
         }
+        "audio-track" => {
+            set_hls_audio_track(index as i32);
+            app::close_sheet();
+            pill("تم تغيير المسار الصوتي");
+        }
+        "sub-size" => {
+            if let Some(sz) = row.get_attribute("data-size") {
+                store("zoet_sub_size", &sz);
+                apply_sub_size();
+                app::close_sheet();
+                pill("تم ضبط حجم الترجمة");
+            }
+        }
         _ => {}
     }
 }
@@ -2178,4 +2280,5 @@ pub fn init() {
     STATE.with(|c| c.borrow_mut().watchdog = Some(timer));
     let fit_mode = storage("otium_fit_mode").unwrap_or_else(|| "contain".into());
     class("playerCanvas", &format!("fit-{fit_mode}"), true);
+    apply_sub_size();
 }

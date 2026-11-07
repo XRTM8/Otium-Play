@@ -2,12 +2,21 @@ package com.krmzi.app
 
 import android.annotation.SuppressLint
 import android.app.PictureInPictureParams
+import android.content.BroadcastReceiver
 import android.content.ComponentCallbacks2
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.ActivityInfo
 import android.content.pm.ApplicationInfo
 import android.content.res.Configuration
 import android.graphics.Color
+import android.media.AudioAttributes
+import android.media.AudioFocusRequest
+import android.media.AudioManager
+import android.media.MediaMetadata
+import android.media.session.MediaSession
+import android.media.session.PlaybackState
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -51,6 +60,19 @@ class MainActivity : AppCompatActivity() {
     private var isVideoPlaying = false
     private var isDestroyed = false
     private var appChromeClient: WebChromeClient? = null
+    private var mediaSession: MediaSession? = null
+    private var audioManager: AudioManager? = null
+    private var audioFocusRequest: AudioFocusRequest? = null
+    private var isNoisyReceiverRegistered = false
+    private val noisyReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action == AudioManager.ACTION_AUDIO_BECOMING_NOISY) {
+                if (isVideoPlaying && ::webView.isInitialized) {
+                    webView.evaluateJavascript("if (window.zoetTogglePlayer) window.zoetTogglePlayer();", null)
+                }
+            }
+        }
+    }
 
     /* ------------------------------------------------------------------ */
     /*  JavaScript bridge                                                  */
@@ -79,12 +101,49 @@ class MainActivity : AppCompatActivity() {
                                     .build()
                             )
                         }
+                        requestPlaybackAudioFocus()
+                        registerNoisyReceiver()
+                        mediaSession?.let {
+                            it.isActive = true
+                            val state = PlaybackState.Builder()
+                                .setActions(PlaybackState.ACTION_PLAY or PlaybackState.ACTION_PAUSE or PlaybackState.ACTION_PLAY_PAUSE or PlaybackState.ACTION_FAST_FORWARD or PlaybackState.ACTION_REWIND)
+                                .setState(PlaybackState.STATE_PLAYING, PlaybackState.PLAYBACK_POSITION_UNKNOWN, 1.0f)
+                                .build()
+                            it.setPlaybackState(state)
+                        }
                     } else {
                         window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                         hideSystemBars(false)
+                        abandonPlaybackAudioFocus()
+                        unregisterNoisyReceiver()
+                        mediaSession?.let {
+                            val state = PlaybackState.Builder()
+                                .setActions(PlaybackState.ACTION_PLAY or PlaybackState.ACTION_PAUSE or PlaybackState.ACTION_PLAY_PAUSE or PlaybackState.ACTION_FAST_FORWARD or PlaybackState.ACTION_REWIND)
+                                .setState(PlaybackState.STATE_PAUSED, PlaybackState.PLAYBACK_POSITION_UNKNOWN, 0.0f)
+                                .build()
+                            it.setPlaybackState(state)
+                        }
                     }
                 } catch (e: Exception) {
                     Log.w(TAG, "Unable to update playback flags: ${e.message}")
+                }
+            }
+        }
+
+        @JavascriptInterface
+        fun updateMediaMetadata(title: String, series: String) {
+            runOnUiThread {
+                try {
+                    mediaSession?.let {
+                        val meta = MediaMetadata.Builder()
+                            .putString(MediaMetadata.METADATA_KEY_TITLE, title)
+                            .putString(MediaMetadata.METADATA_KEY_ALBUM, series)
+                            .putString(MediaMetadata.METADATA_KEY_ARTIST, "ZOET")
+                            .build()
+                        it.setMetadata(meta)
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "Metadata update error: ${e.message}")
                 }
             }
         }
@@ -363,6 +422,7 @@ class MainActivity : AppCompatActivity() {
         setContentView(container)
 
         configureWebView()
+        setupMediaSession()
         setupBackHandler()
         webView.loadUrl(APP_URL)
         webView.requestFocus()
@@ -410,6 +470,129 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun setupMediaSession() {
+        try {
+            audioManager = getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+            mediaSession = MediaSession(this, "ZOET_Playback").apply {
+                @Suppress("DEPRECATION")
+                setFlags(MediaSession.FLAG_HANDLES_MEDIA_BUTTONS or MediaSession.FLAG_HANDLES_TRANSPORT_CONTROLS)
+                setCallback(object : MediaSession.Callback() {
+                    override fun onPlay() {
+                        runOnUiThread {
+                            if (::webView.isInitialized) {
+                                webView.evaluateJavascript("if (window.zoetTogglePlayer) window.zoetTogglePlayer(); else if (window.krmziTogglePlayer) window.krmziTogglePlayer();", null)
+                            }
+                        }
+                    }
+                    override fun onPause() {
+                        runOnUiThread {
+                            if (::webView.isInitialized) {
+                                webView.evaluateJavascript("if (window.zoetTogglePlayer) window.zoetTogglePlayer(); else if (window.krmziTogglePlayer) window.krmziTogglePlayer();", null)
+                            }
+                        }
+                    }
+                    override fun onFastForward() {
+                        runOnUiThread {
+                            if (::webView.isInitialized) {
+                                webView.evaluateJavascript("if (window.zoetSeekPlayer) window.zoetSeekPlayer(10); else if (window.krmziSeekPlayer) window.krmziSeekPlayer(10);", null)
+                            }
+                        }
+                    }
+                    override fun onRewind() {
+                        runOnUiThread {
+                            if (::webView.isInitialized) {
+                                webView.evaluateJavascript("if (window.zoetSeekPlayer) window.zoetSeekPlayer(-10); else if (window.krmziSeekPlayer) window.krmziSeekPlayer(-10);", null)
+                            }
+                        }
+                    }
+                })
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "MediaSession setup failed: ${e.message}")
+        }
+    }
+
+    private fun requestPlaybackAudioFocus(): Boolean {
+        val am = audioManager ?: return false
+        return try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val playbackAttributes = AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_MEDIA)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_MOVIE)
+                    .build()
+                val afr = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
+                    .setAudioAttributes(playbackAttributes)
+                    .setAcceptsDelayedFocusGain(false)
+                    .setOnAudioFocusChangeListener { focusChange ->
+                        if (focusChange == AudioManager.AUDIOFOCUS_LOSS || focusChange == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT) {
+                            runOnUiThread {
+                                if (isVideoPlaying && ::webView.isInitialized) {
+                                    webView.evaluateJavascript("if (window.zoetTogglePlayer) { if (!document.getElementById('nativePlayer')?.paused) window.zoetTogglePlayer(); }", null)
+                                }
+                            }
+                        }
+                    }
+                    .build()
+                audioFocusRequest = afr
+                am.requestAudioFocus(afr) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
+            } else {
+                @Suppress("DEPRECATION")
+                am.requestAudioFocus(
+                    { focusChange ->
+                        if (focusChange == AudioManager.AUDIOFOCUS_LOSS || focusChange == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT) {
+                            runOnUiThread {
+                                if (isVideoPlaying && ::webView.isInitialized) {
+                                    webView.evaluateJavascript("if (window.zoetTogglePlayer) { if (!document.getElementById('nativePlayer')?.paused) window.zoetTogglePlayer(); }", null)
+                                }
+                            }
+                        }
+                    },
+                    AudioManager.STREAM_MUSIC,
+                    AudioManager.AUDIOFOCUS_GAIN
+                ) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Audio focus request failed: ${e.message}")
+            false
+        }
+    }
+
+    private fun abandonPlaybackAudioFocus() {
+        val am = audioManager ?: return
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                audioFocusRequest?.let { am.abandonAudioFocusRequest(it) }
+                audioFocusRequest = null
+            } else {
+                @Suppress("DEPRECATION")
+                am.abandonAudioFocus(null)
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Abandon audio focus failed: ${e.message}")
+        }
+    }
+
+    private fun registerNoisyReceiver() {
+        if (!isNoisyReceiverRegistered) {
+            try {
+                registerReceiver(noisyReceiver, IntentFilter(AudioManager.ACTION_AUDIO_BECOMING_NOISY))
+                isNoisyReceiverRegistered = true
+            } catch (e: Exception) {
+                Log.w(TAG, "Noisy receiver registration failed: ${e.message}")
+            }
+        }
+    }
+
+    private fun unregisterNoisyReceiver() {
+        if (isNoisyReceiverRegistered) {
+            try {
+                unregisterReceiver(noisyReceiver)
+            } catch (_: Exception) {
+            }
+            isNoisyReceiverRegistered = false
+        }
+    }
+
     @SuppressLint("SetJavaScriptEnabled")
     private fun createWebView() {
         webView = WebView(this).apply {
@@ -450,8 +633,7 @@ class MainActivity : AppCompatActivity() {
         settings.setGeolocationEnabled(false)
         settings.setNeedInitialFocus(false)
         settings.textZoom = 100
-        settings.userAgentString =
-            (settings.userAgentString ?: "Mozilla/5.0") + " KrmziApp/$FALLBACK_VERSION_NAME"
+        settings.userAgentString = settings.userAgentString ?: "Mozilla/5.0 (Linux; Android 14; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             settings.offscreenPreRaster = true
         }
@@ -864,6 +1046,13 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         isDestroyed = true
+        abandonPlaybackAudioFocus()
+        unregisterNoisyReceiver()
+        try {
+            mediaSession?.isActive = false
+            mediaSession?.release()
+            mediaSession = null
+        } catch (_: Exception) {}
         try {
             if (::webView.isInitialized) {
                 webView.stopLoading()
