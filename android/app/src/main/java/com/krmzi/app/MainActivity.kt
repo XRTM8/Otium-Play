@@ -133,7 +133,7 @@ class MainActivity : AppCompatActivity() {
         fun checkForUpdates(): String {
             var connection: HttpURLConnection? = null
             return try {
-                val url = URL("https://api.github.com/repos/XRTM8/Otium-Play/releases/latest")
+                val url = URL("https://api.github.com/repos/XRTM8/ZOET/releases/latest")
                 val conn = (url.openConnection() as HttpURLConnection).apply {
                     connectTimeout = 8_000
                     readTimeout = 8_000
@@ -171,7 +171,7 @@ class MainActivity : AppCompatActivity() {
                 if (apkUrl.isEmpty()) {
                     apkUrl = json.optString(
                         "html_url",
-                        "https://github.com/XRTM8/Otium-Play/releases/latest"
+                        "https://github.com/XRTM8/ZOET/releases/latest"
                     )
                 }
 

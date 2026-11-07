@@ -1093,7 +1093,7 @@ fn check_updates(manual: bool) {
     }
     spawn_local(async move {
         let result = api::request_json(
-            "https://api.github.com/repos/XRTM8/Otium-Play/releases/latest",
+            "https://api.github.com/repos/XRTM8/ZOET/releases/latest",
             None,
         )
         .await;

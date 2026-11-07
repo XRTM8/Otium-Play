@@ -9,7 +9,7 @@ Updated: 2026-11-06, Asia/Baghdad. The user has approximately5% quota left and e
 ## Repository and user intent
 
 - Local directory: `C:\Users\mjd20\OneDrive\Desktop\krmzi-app`.
-- GitHub: https://github.com/XRTM8/Otium-Play ; origin is already renamed correctly.
+- GitHub: https://github.com/XRTM8/ZOET ; origin is already renamed correctly.
 - Only `main` should remain. Base before this work: `8b96a17` (v1.5.0). All changes in this checkpoint belong to the current request.
 - Latest published release when inspected: v1.5.0. **v2.0.0 has not been published by this session.**
 - New version:2.0.0, Android versionCode15. Android applicationId stays `com.krmzi.app`.
