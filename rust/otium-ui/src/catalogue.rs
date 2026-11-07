@@ -184,7 +184,7 @@ pub fn episode_number(value: &Value) -> String {
         .unwrap_or_default()
 }
 
-fn season(value: &Value) -> String {
+pub fn season(value: &Value) -> String {
     let value = number(&field(value, "season"));
     if value.is_empty() {
         "1".to_owned()
@@ -404,6 +404,103 @@ pub fn match_episode(current: &Value, episodes: &[Value]) -> Option<Value> {
     }
 }
 
+pub fn match_episode_cross_season(
+    current: &Value,
+    current_all: &[Value],
+    target_all: &[Value],
+) -> Option<Value> {
+    if let Some(direct) = match_episode(current, target_all) {
+        return Some(direct);
+    }
+    let cur_num = episode_number(current);
+    let cur_season = season(current);
+    let cur_num_int = cur_num.parse::<usize>().ok()?;
+    let cur_season_int = cur_season.parse::<usize>().unwrap_or(1);
+
+    // Calculate absolute 1-based chronological index K of current episode
+    let abs_k = if cur_season_int > 1 {
+        let prior_count = current_all
+            .iter()
+            .filter(|e| {
+                season(e).parse::<usize>().unwrap_or(1) < cur_season_int
+                    && edition(e) == edition(current)
+            })
+            .count();
+        if prior_count > 0 {
+            prior_count + cur_num_int
+        } else {
+            current_all
+                .iter()
+                .position(|e| field(e, "url") == field(current, "url"))
+                .map(|p| p + 1)
+                .unwrap_or(cur_num_int)
+        }
+    } else {
+        current_all
+            .iter()
+            .position(|e| field(e, "url") == field(current, "url"))
+            .map(|p| p + 1)
+            .unwrap_or(cur_num_int)
+    };
+
+    // Group target seasons
+    let mut target_seasons: Vec<usize> = target_all
+        .iter()
+        .filter(|e| edition(e) == edition(current))
+        .map(|e| season(e).parse::<usize>().unwrap_or(1))
+        .collect();
+    target_seasons.sort_unstable();
+    target_seasons.dedup();
+
+    if target_seasons.len() > 1 {
+        // Target has multiple seasons (e.g. Cinemana)
+        let mut rem = abs_k;
+        for s_num in target_seasons {
+            let season_eps: Vec<&Value> = target_all
+                .iter()
+                .filter(|e| {
+                    season(e).parse::<usize>().unwrap_or(1) == s_num
+                        && edition(e) == edition(current)
+                })
+                .collect();
+            let count = season_eps.len();
+            if rem <= count {
+                let ep_in_season = rem;
+                if let Some(target) = season_eps
+                    .iter()
+                    .find(|e| episode_number(e) == ep_in_season.to_string())
+                {
+                    return Some((*target).clone());
+                }
+                if ep_in_season > 0 && ep_in_season <= count {
+                    return Some((*season_eps[ep_in_season - 1]).clone());
+                }
+                break;
+            } else {
+                rem -= count;
+            }
+        }
+    } else {
+        // Target is flat-numbered (e.g. Krmzi)
+        if let Some(target) = target_all.iter().find(|e| {
+            edition(e) == edition(current) && episode_number(e) == abs_k.to_string()
+        }) {
+            return Some((*target).clone());
+        }
+    }
+
+    // Fallback: match by 0-based position in target_all
+    let compatible: Vec<&Value> = target_all
+        .iter()
+        .filter(|e| edition(e) == edition(current))
+        .collect();
+    if abs_k > 0 && abs_k <= compatible.len() {
+        return Some((*compatible[abs_k - 1]).clone());
+    }
+
+    None
+}
+
 pub fn find_counterpart(item: &Value, candidates: &[Value]) -> Option<Value> {
     let titles = titles(item);
     if titles.is_empty() || kind(item) != "series" {
@@ -615,5 +712,34 @@ mod tests {
             .len(),
             1
         );
+    }
+
+    #[test]
+    fn cross_season_episode_mapping() {
+        let krmzi_episodes: Vec<Value> = (1..=20)
+            .map(|i| json!({"url": format!("krmzi:{}", i), "episodeNum": i.to_string(), "season": "1"}))
+            .collect();
+        let mut cinemana_episodes: Vec<Value> = (1..=19)
+            .map(|i| json!({"url": format!("cinemana:1:{}", i), "episodeNum": i.to_string(), "season": "1"}))
+            .collect();
+        cinemana_episodes.push(json!({"url": "cinemana:2:1", "episodeNum": "1", "season": "2"}));
+
+        // 1. Krmzi Ep 20 -> Cinemana Season 2 Ep 1
+        let krmzi_20 = &krmzi_episodes[19];
+        let matched = match_episode_cross_season(krmzi_20, &krmzi_episodes, &cinemana_episodes).unwrap();
+        assert_eq!(matched["url"], "cinemana:2:1");
+        assert_eq!(matched["season"], "2");
+        assert_eq!(matched["episodeNum"], "1");
+
+        // 2. Cinemana Season 2 Ep 1 -> Krmzi Ep 20
+        let cinemana_s2e1 = &cinemana_episodes[19];
+        let matched_krmzi = match_episode_cross_season(cinemana_s2e1, &cinemana_episodes, &krmzi_episodes).unwrap();
+        assert_eq!(matched_krmzi["url"], "krmzi:20");
+        assert_eq!(matched_krmzi["episodeNum"], "20");
+
+        // 3. Normal match within Season 1
+        let krmzi_15 = &krmzi_episodes[14];
+        let matched_15 = match_episode_cross_season(krmzi_15, &krmzi_episodes, &cinemana_episodes).unwrap();
+        assert_eq!(matched_15["url"], "cinemana:1:15");
     }
 }

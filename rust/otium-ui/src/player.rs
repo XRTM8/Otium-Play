@@ -315,9 +315,56 @@ fn backdrop(url: &str) {
 fn title_ui(episode: &Value) {
     let ep_title = s(episode, "title");
     let series_title = s(episode, "seriesTitle");
-    text("hudEpTitle", &ep_title);
-    text("hudSeriesTitle", &series_title);
-    bridge_metadata(&ep_title, &series_title);
+    let main_title = if !series_title.is_empty() {
+        catalogue::clean_title(&series_title)
+    } else {
+        catalogue::clean_title(&ep_title)
+    };
+    let season_str = catalogue::season(episode);
+    let ep_num_str = catalogue::episode_number(episode);
+    let season_val = season_str.parse::<usize>().unwrap_or(1);
+
+    let sub_title = if !ep_num_str.is_empty() {
+        if season_val > 1 {
+            format!("الموسم {} · الحلقة {}", season_val, ep_num_str)
+        } else {
+            format!("الحلقة {}", ep_num_str)
+        }
+    } else {
+        let clean_ep = catalogue::clean_title(&ep_title);
+        if clean_ep != main_title && !clean_ep.is_empty() {
+            let stripped = clean_ep
+                .strip_prefix(&main_title)
+                .map(|s| s.trim_start_matches([' ', '-', '·', ':']))
+                .unwrap_or(&clean_ep)
+                .trim();
+            if !stripped.is_empty() {
+                stripped.to_owned()
+            } else {
+                String::new()
+            }
+        } else {
+            String::new()
+        }
+    };
+
+    text("hudEpTitle", &main_title);
+    if sub_title.is_empty() {
+        text("hudSeriesTitle", "");
+        show("hudSeriesTitle", false);
+    } else {
+        text("hudSeriesTitle", &sub_title);
+        show("hudSeriesTitle", true);
+    }
+    let full_meta = format!("{} - {}", main_title, sub_title);
+    bridge_metadata(
+        if sub_title.is_empty() {
+            &main_title
+        } else {
+            &full_meta
+        },
+        &main_title,
+    );
     html(
         "playerFavBtn",
         if app::is_favorite(episode) {
@@ -1096,7 +1143,19 @@ pub fn open_sources() {
         content.push_str(&format!("<button class=\"sheet-row\" data-player-action=\"direct\"><span>مشغّل {} المباشر</span><span class=\"sheet-pill\">{}</span></button>",source_name(current_source),if STATE.with(|c|c.borrow().embedded.is_none()){"الحالي"}else{"تشغيل"}));
     }
     for (i, server) in rows(&episode, "servers").iter().enumerate() {
-        content.push_str(&format!("<button class=\"sheet-row\" data-player-action=\"embed\" data-index=\"{i}\"><span>سيرفر {}</span><i class=\"fa-solid fa-server\"></i></button>",esc(&s(server,"name"))));
+        let name = s(server, "name");
+        let is_direct = name.eq_ignore_ascii_case("ok");
+        if is_direct {
+            content.push_str(&format!(
+                "<button class=\"sheet-row\" data-player-action=\"embed\" data-index=\"{i}\"><span>سيرفر مباشر ({})</span><span class=\"sheet-pill direct\"><i class=\"fa-solid fa-bolt\"></i> مباشر</span></button>",
+                esc(&name)
+            ));
+        } else {
+            content.push_str(&format!(
+                "<button class=\"sheet-row\" data-player-action=\"embed\" data-index=\"{i}\"><span>سيرفر {}</span><span class=\"sheet-pill\">خارجي</span></button>",
+                esc(&name)
+            ));
+        }
     }
     content.push_str("<p class=\"source-switch-note\">التبديل بين المصدرين المباشرين يحتفظ بموضعك وإعداداتك. السيرفر الخارجي يستخدم مشغّله الخاص وقد يبدأ من البداية.</p>");
     app::open_sheet("المصادر والسيرفرات", &content);
@@ -1199,27 +1258,8 @@ fn switch_provider(url: String) {
             return;
         };
         let target_episodes = rows(&series, "episodes");
-        let matched = catalogue::match_episode(&episode, &target_episodes).or_else(|| {
-            // Smart cross-source mapping between flat-numbering (Krmzi) and seasonal (Cinemana)
-            let current_url = s(&episode, "url");
-            let current_pos = STATE.with(|c| {
-                c.borrow()
-                    .episodes
-                    .iter()
-                    .position(|e| s(e, "url") == current_url)
-            });
-            if let Some(pos) = current_pos {
-                if pos < target_episodes.len() {
-                    return Some(target_episodes[pos].clone());
-                }
-            }
-            let num = catalogue::episode_number(&episode).parse::<usize>().ok()?;
-            if num > 0 && num <= target_episodes.len() {
-                Some(target_episodes[num - 1].clone())
-            } else {
-                None
-            }
-        });
+        let current_all = STATE.with(|c| c.borrow().episodes.clone());
+        let matched = catalogue::match_episode_cross_season(&episode, &current_all, &target_episodes);
         let Some(matched) = matched else {
             app::open_sheet("ترقيم الحلقات مختلف",&format!("<p class=\"empty-note\">ما غيرنا الحلقة تلقائياً حتى ما نفتح حلقة مختلفة.</p><button class=\"sheet-row\" data-player-action=\"browse-source\" data-url=\"{}\">عرض حلقات المصدر الآخر</button>",esc(&url)));
             return;
@@ -1258,7 +1298,7 @@ fn switch_provider(url: String) {
             p.active_url = s(&candidate, "url");
             p.episode = Some(candidate);
             p.series = series;
-            p.episodes = vec![];
+            p.episodes = target_episodes;
             p.rollback = restore;
             p.refreshed = false;
             p.next_deadline = None;
@@ -1280,8 +1320,10 @@ fn switch_mirror(index: usize) {
         return;
     };
     if !s(&server, "name").eq_ignore_ascii_case("ok") || s(&server, "id").is_empty() {
-        app::close_sheet();
-        play_embed(server);
+        app::open_sheet(
+            "سيرفر غير مباشر",
+            "<p class=\"empty-note\">هذا السيرفر خارجي ولا يوفر بثاً مباشراً داخل التطبيق. المشاهدة الحالية مستمرة بدون انقطاع.</p>",
+        );
         return;
     }
     let (session, generation, controller) = begin_switch("تجهيز السيرفر البديل");
@@ -1316,14 +1358,12 @@ fn switch_mirror(index: usize) {
                 });
                 play_direct(None, settings, false);
             }
-            Ok(_) => {
-                app::close_sheet();
-                play_embed(server);
+            Ok(_) | Err(_) => {
+                app::open_sheet(
+                    "السيرفر غير متاح",
+                    "<p class=\"empty-note\">تعذر استخراج البث المباشر من هذا السيرفر. المشاهدة الحالية مستمرة بدون انقطاع.</p>",
+                );
             }
-            Err(_) => app::open_sheet(
-                "السيرفر غير متاح",
-                "<p class=\"empty-note\">تعذر تجهيز السيرفر المحدد. المشاهدة الحالية مستمرة.</p>",
-            ),
         }
     });
 }

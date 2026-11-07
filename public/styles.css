@@ -982,7 +982,7 @@ video::-webkit-media-controls-panel {
 
 .player-screen.embed-mode .player-bar-top {
   pointer-events: none;
-  background: linear-gradient(180deg, rgba(0,0,0,0.85) 0%, transparent 100%);
+  background: transparent !important;
   opacity: 1 !important;
   display: flex !important;
 }
@@ -992,7 +992,13 @@ video::-webkit-media-controls-panel {
 }
 
 .player-screen.embed-mode .player-bar-bottom {
-  display: none !important;
+  opacity: 1 !important;
+  display: flex !important;
+  pointer-events: none;
+}
+
+.player-screen.embed-mode .player-bar-bottom > * {
+  pointer-events: auto;
 }
 
 /* Drawer Server Switcher Bar */
