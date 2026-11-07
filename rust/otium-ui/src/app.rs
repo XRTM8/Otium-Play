@@ -303,6 +303,7 @@ fn render_grid(id: &str, items: &[Value]) {
     }
     let mut retained = HashSet::new();
     let mut previous: Option<Element> = None;
+    let holder = document().create_element("div").unwrap();
     for item in items {
         let url = s(item, "url");
         let markup = card(item);
@@ -312,7 +313,6 @@ fn render_grid(id: &str, items: &[Value]) {
         {
             node.clone()
         } else {
-            let holder = document().create_element("div").unwrap();
             holder.set_inner_html(&markup);
             let node = holder.first_element_child().unwrap();
             let _ = node.set_attribute("data-card", &markup);

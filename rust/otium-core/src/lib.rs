@@ -63,7 +63,8 @@ impl Engine {
         let client = Client::builder()
             .user_agent(USER_AGENT)
             .connect_timeout(Duration::from_secs(8))
-            .pool_max_idle_per_host(6)
+            .pool_max_idle_per_host(12)
+            .tcp_nodelay(true)
             .redirect(reqwest::redirect::Policy::none())
             .build()
             .expect("HTTP client");
