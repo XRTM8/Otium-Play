@@ -43,10 +43,11 @@ img { display: block; max-width: 100%; }
 .img-broken { visibility: hidden; }
 .app-frame { position: relative; width: 100%; height: 100vh; height: 100dvh; overflow: hidden; background: var(--bg-core); }
 .top-nav { position: absolute; inset: 0 0 auto; z-index: 40; height: calc(64px + var(--safe-top)); padding: var(--safe-top) 22px 0; display: flex; align-items: center; justify-content: space-between; background: var(--bg-core); border-bottom: 1px solid var(--line-subtle); }
-.nav-brand { display: flex; align-items: center; gap: 10px; direction: ltr; min-height: 44px; }
-.brand-mark { color: var(--accent); font-size: 16px; line-height: 1; }
-.brand-text { display: flex; align-items: baseline; gap: 4px; font-family: 'Tajawal', sans-serif; font-size: 25px; font-weight: 800; letter-spacing: -.9px; }
-.brand-text > span { color: var(--text-sub); font-size: 18px; font-weight: 400; letter-spacing: -.5px; }
+.nav-brand { display: flex; align-items: center; gap: 12px; direction: ltr; min-height: 44px; }
+.brand-mark { width: 32px; height: 32px; display: grid; place-items: center; border-radius: 9px; background: #13151b; border: 1px solid rgba(255, 255, 255, 0.08); box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45); color: #f3f4f6; flex-shrink: 0; }
+.brand-mark svg { width: 19px; height: 19px; display: block; }
+.brand-text { display: flex; align-items: baseline; gap: 8px; font-family: -apple-system, BlinkMacSystemFont, 'Plus Jakarta Sans', 'Inter', 'Segoe UI', sans-serif; font-size: 22px; font-weight: 900; letter-spacing: 0.6px; color: var(--text-main); text-transform: uppercase; }
+.brand-text > span { font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans-serif; font-size: 10px; font-weight: 700; letter-spacing: 1.8px; text-transform: uppercase; color: var(--text-dim); }
 .nav-icon-btn, .btn-back, .search-clear { min-width: 44px; min-height: 44px; display: grid; place-items: center; color: var(--text-main); font-size: 17px; border-radius: 6px; }
 .nav-icon-btn:hover { background: var(--bg-elevated); }
 .content-canvas { position: absolute; inset: calc(64px + var(--safe-top)) 0 calc(65px + var(--safe-bottom)); overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; }
@@ -1061,9 +1062,10 @@ video::cue { font-family: 'Tajawal', sans-serif; font-size: 90%; background: #00
 html[data-display='tv'] { --safe-top:0px;--safe-bottom:0px }
 html[data-display='tv'] body { font-size:20px }
 html[data-display='tv'] .top-nav { inset:0 0 auto;height:96px;padding:0 56px }
-html[data-display='tv'] .brand-text { font-size:36px }
-html[data-display='tv'] .brand-text>span { font-size:24px }
-html[data-display='tv'] .brand-mark { font-size:22px }
+html[data-display='tv'] .brand-text { font-size:32px; gap: 12px; }
+html[data-display='tv'] .brand-text>span { font-size:13px; letter-spacing: 2.2px; }
+html[data-display='tv'] .brand-mark { width:44px; height:44px; border-radius: 11px; }
+html[data-display='tv'] .brand-mark svg { width:25px; height:25px; }
 html[data-display='tv'] .nav-icon-btn { min-width:56px;min-height:56px;font-size:23px }
 html[data-display='tv'] .bottom-dock { inset:16px 310px auto 180px;width:auto;height:64px;border:0;padding:0;background:transparent }
 html[data-display='tv'] .dock-bar { display:flex;flex-direction:row;height:64px;gap:10px }
@@ -1176,8 +1178,7 @@ html[data-display='tv'] .sheet-episode-grid .episode-copy strong { font-size:19p
 html[data-display='tv'] .sheet-episode-grid .episode-card { min-height:105px;gap:12px }
 
 /* Lively feedback, with one restrained accent shared by all device surfaces. */
-.brand-mark { width:30px;height:30px;display:grid;place-items:center;border-radius:9px;background:#e1e9e9;color:#11171d;font-size:12px }
-.brand-text>span { color:var(--text-sub) }
+/* brand style preserved */
 .spotlight-card { border-radius:17px;border:1px solid #ffffff0b;isolation:isolate }
 .spotlight-img { transition:opacity .35s ease,transform .7s ease-out }
 .spotlight-card:hover .spotlight-img { transform:scale(1.025) }
@@ -1249,8 +1250,7 @@ html[data-display='tv'] .seek-step { font-size:15px;bottom:14px }
 /* Rust UI: one catalogue at a time. Only floating surfaces blur content. */
 .top-nav { inset:0 0 auto;height:calc(68px + var(--safe-top));padding-inline:24px;background:var(--bg-glass-dock);border-bottom:0 }
 .nav-tools { display:flex;gap:5px }
-.brand-text { font-size:25px;letter-spacing:-.6px }
-.brand-mark { width:28px;height:28px;border-radius:8px }
+/* brand size preserved */
 .catalogue-tabs { position:absolute;inset:calc(68px + var(--safe-top)) 0 auto;z-index:35;height:56px;display:flex;align-items:stretch;padding-inline:24px;gap:28px;border-bottom:1px solid var(--line-subtle);background:var(--bg-glass-dock) }
 .catalogue-tabs button { position:relative;font-size:17px;font-weight:500;color:var(--text-dim);padding:0 2px;min-width:68px;transition:color .16s }
 .catalogue-tabs button.active { color:var(--text-main) }
