@@ -48,8 +48,8 @@ class MainActivity : AppCompatActivity() {
     private companion object {
         const val TAG = "KrmziMainActivity"
         const val APP_URL = "https://appassets.androidplatform.net/assets/public/index.html"
-        const val FALLBACK_VERSION_NAME = "2.0.0"
-        const val FALLBACK_VERSION_CODE = 15L
+        const val FALLBACK_VERSION_NAME = "2.1.0"
+        const val FALLBACK_VERSION_CODE = 16L
     }
 
     private lateinit var webView: WebView

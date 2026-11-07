@@ -1244,7 +1244,7 @@ pub fn init() {
     }
     apply_display();
     update_source();
-    text("installedVersionText", "v2.0.0");
+    text("installedVersionText", "v2.1.0");
     on("tabSeries", "click", |_| set_view("series"));
     on("tabMovies", "click", |_| set_view("movies"));
     on("openLibraryBtn", "click", |_| set_view("library"));
