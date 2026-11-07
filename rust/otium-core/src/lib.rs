@@ -583,7 +583,18 @@ fn allowed_authority(url: &Url) -> bool {
         && url.port_or_known_default() == Some(443)
 }
 fn krmzi_host(url: &Url) -> bool {
-    allowed_authority(url) && matches!(url.host_str(), Some("krmzi.org" | "www.krmzi.org"))
+    allowed_authority(url)
+        && matches!(
+            url.host_str(),
+            Some(
+                "krmzi.org"
+                    | "www.krmzi.org"
+                    | "krmzi.net"
+                    | "www.krmzi.net"
+                    | "krmzi.tv"
+                    | "www.krmzi.tv"
+            )
+        )
 }
 fn ok_host(url: &Url) -> bool {
     allowed_authority(url) && matches!(url.host_str(), Some("ok.ru" | "www.ok.ru"))

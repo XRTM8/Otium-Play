@@ -873,6 +873,52 @@ fn click(event: Event) {
                 let _ = window().open_with_url_and_target(&url, "_blank");
             }
         }
+        Some("export-backup") => {
+            let hist = read_records("krmzi_hist");
+            let favs = read_records("krmzi_favs");
+            let backup = json!({
+                "app": "ZOET",
+                "version": 2,
+                "history": hist,
+                "favorites": favs
+            });
+            let text_val = serde_json::to_string(&backup).unwrap_or_default();
+            if let Some(textarea) = document().get_element_by_id("backupTextarea") {
+                let _ = Reflect::set(textarea.as_ref(), &"value".into(), &text_val.clone().into());
+            }
+            if let Ok(cb) = Reflect::get(window().navigator().as_ref(), &"clipboard".into()) {
+                if let Ok(wt) = Reflect::get(&cb, &"writeText".into()) {
+                    if let Ok(f) = wt.dyn_into::<js_sys::Function>() {
+                        let _ = f.call1(&cb, &text_val.into());
+                    }
+                }
+            }
+            notify("تم تجهيز النسخة الاحتياطية ونسخها إلى الحافظة");
+        }
+        Some("import-backup") => {
+            if let Some(textarea) = document().get_element_by_id("backupTextarea") {
+                let raw = Reflect::get(textarea.as_ref(), &"value".into())
+                    .ok()
+                    .and_then(|v| v.as_string())
+                    .unwrap_or_default();
+                let raw = raw.trim();
+                if let Ok(data) = serde_json::from_str::<Value>(raw) {
+                    if let Some(hist) = data["history"].as_array() {
+                        store("krmzi_hist", &serde_json::to_string(hist).unwrap_or_default());
+                        STATE.with(|s| s.borrow_mut().history = hist.clone());
+                    }
+                    if let Some(favs) = data["favorites"].as_array() {
+                        store("krmzi_favs", &serde_json::to_string(favs).unwrap_or_default());
+                        STATE.with(|s| s.borrow_mut().favorites = favs.clone());
+                    }
+                    render_library();
+                    close_sheet();
+                    notify("تم استعادة السجل والمفضلة بنجاح");
+                } else {
+                    notify("صيغة الكود غير صحيحة، يرجى التأكد من نسخه بالكامل");
+                }
+            }
+        }
         Some("season") => {
             if let Some(season) = button.get_attribute("data-season") {
                 let _ = el("seriesEpisodeList").set_attribute("data-season", &season);
@@ -909,6 +955,22 @@ fn update_source() {
             }
         }
     }
+}
+fn open_backup_sheet() {
+    open_sheet(
+        "النسخ الاحتياطي ونقل البيانات",
+        "<div class=\"backup-dialog\">\
+            <p class=\"backup-desc\">احفظ سجلك ومفضلتك بدون أي حساب سحابي، وانقلها لأي هاتف أو شاشة ذكية بسهولة.</p>\
+            <div class=\"backup-row\">\
+                <button class=\"load-more-btn\" data-action=\"export-backup\"><i class=\"fa-solid fa-copy\"></i> تصدير ونسخ بياناتي</button>\
+            </div>\
+            <div class=\"backup-import-section\">\
+                <label for=\"backupTextarea\">كود النسخة الاحتياطية:</label>\
+                <textarea id=\"backupTextarea\" rows=\"4\" placeholder=\"ألصق كود النسخة الاحتياطية هنا...\"></textarea>\
+                <button class=\"load-more-btn secondary\" data-action=\"import-backup\"><i class=\"fa-solid fa-file-import\"></i> استعادة البيانات الآن</button>\
+            </div>\
+        </div>"
+    );
 }
 fn apply_display() {
     let saved_display = storage("zoet_display").or_else(|| storage("otium_display"));
@@ -1054,7 +1116,16 @@ fn remote_focus(event: &KeyboardEvent) {
         })
         .collect::<Vec<_>>();
     let current = document().active_element();
+    let current = match current {
+        Some(ref el) if el.tag_name() != "BODY" && el.tag_name() != "HTML" => Some(el),
+        _ => None,
+    };
     let Some(current) = current else {
+        if let Some(first) = nodes.first() {
+            event.prevent_default();
+            let _ = first.focus();
+            first.scroll_into_view_with_bool(false);
+        }
         return;
     };
     let rect = current.get_bounding_client_rect();
@@ -1066,7 +1137,7 @@ fn remote_focus(event: &KeyboardEvent) {
     };
     let mut ranked = nodes
         .iter()
-        .filter(|node| node.unchecked_ref::<Element>() != &current)
+        .filter(|node| node.unchecked_ref::<Element>() != current)
         .filter_map(|node| {
             let r = node.get_bounding_client_rect();
             let dx = r.x() + r.width() / 2. - rect.x() - rect.width() / 2.;
@@ -1187,6 +1258,7 @@ pub fn init() {
         let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
         check_updates_auto();
     });
+    on("backupDataBtn", "click", |_| open_backup_sheet());
     on("clearHistoryBtn", "click", |_| {
         STATE.with(|state| state.borrow_mut().history.clear());
         store("krmzi_hist", "[]");

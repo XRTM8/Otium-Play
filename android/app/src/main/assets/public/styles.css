@@ -1399,3 +1399,65 @@ html[data-display='tv'] .series-tile-title { font-size:19px }
 html[data-display='tv'] .provider-tag { font-size:13px }
 @media(prefers-reduced-transparency:reduce){.top-nav,.catalogue-tabs,.sheet-panel { backdrop-filter:none;background:var(--bg-surface) }}
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
+
+/* Library Actions & Backup Dialog */
+.library-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.backup-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 6px 4px;
+}
+.backup-desc {
+  font-size: 13px;
+  color: var(--text-sub);
+  line-height: 1.6;
+}
+.backup-row {
+  display: flex;
+  gap: 12px;
+}
+.backup-import-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 10px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line-subtle);
+}
+.backup-import-section label {
+  font-size: 12px;
+  color: var(--text-dim);
+  font-weight: 600;
+}
+#backupTextarea {
+  width: 100%;
+  background: var(--bg-surface);
+  border: 1px solid var(--line-subtle);
+  border-radius: var(--radius-xs);
+  color: var(--text-main);
+  padding: 10px 12px;
+  font-family: monospace;
+  font-size: 12px;
+  resize: vertical;
+}
+#backupTextarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.load-more-btn.secondary {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--line-subtle);
+  color: var(--text-main);
+}
+html[data-display='tv'] :focus-visible {
+  outline: 3px solid #ffffff !important;
+  outline-offset: 4px !important;
+  box-shadow: 0 0 24px rgba(255, 255, 255, 0.45), 0 0 8px #ffffff !important;
+  transform: scale(1.03) !important;
+  transition: transform 0.15s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.15s ease !important;
+}
